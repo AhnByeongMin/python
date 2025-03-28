@@ -1,0 +1,2444 @@
+# 필요한 라이브러리 임포트
+import pandas as pd
+import streamlit as st
+import base64
+from io import BytesIO
+import io
+import numpy as np
+from st_aggrid import AgGrid, GridOptionsBuilder
+from st_aggrid.shared import GridUpdateMode
+import plotly.express as px
+import plotly.graph_objects as go
+import xlsxwriter
+import html
+import re
+
+# 페이지 설정
+st.set_page_config(page_title="CRM팀 데이터 분석기", layout="wide")
+
+# Material UI 스타일 적용
+st.markdown("""
+<style>
+    .main {
+        background-color: #fafafa;
+        font-family: 'Roboto', sans-serif;
+    }
+    .stButton button {
+        background-color: #1976d2;
+        color: white;
+        border-radius: 4px;
+        padding: 0.5rem 1rem;
+        border: none;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+    .stButton button:hover {
+        background-color: #1565c0;
+    }
+    h1, h2, h3 {
+        color: #1976d2;
+        font-weight: 400;
+    }
+    .stTextInput input, .stSelectbox, .stMultiselect, .stNumberInput input {
+        border-radius: 4px;
+        border: 1px solid #ddd;
+        padding: 0.5rem;
+    }
+    .card {
+        background-color: white;
+        border-radius: 8px;
+        padding: 1.5rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
+        margin-bottom: 1rem;
+    }
+    .data-grid {
+        margin-top: 1rem;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    .download-button {
+        display: inline-block;
+        background-color: #1976d2;
+        color: white;
+        padding: 0.5rem 1rem;
+        text-decoration: none;
+        border-radius: 4px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+    .download-button:hover {
+        background-color: #1565c0;
+    }
+    .copy-button {
+        background-color: #1976d2;
+        color: white;
+        border: none;
+        padding: 5px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        margin-top: 10px;
+    }
+    .copy-button:hover {
+        background-color: #1565c0;
+    }
+    .filter-container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+    .filter-item {
+        flex: 1;
+        min-width: 200px;
+    }
+    .success-message {
+        color: green;
+        font-weight: bold;
+    }
+    .error-message {
+        color: red;
+        font-weight: bold;
+    }
+    .scroll-area {
+        max-height: 200px;
+        overflow-y: auto;
+        border: 1px solid #eee;
+        border-radius: 4px;
+        padding: 10px;
+    }
+    .checkbox-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+    }
+    /* 탭 스타일 */
+    .main-tabs {
+        margin-bottom: 20px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# 최상위 탭 생성
+tab1, tab2 = st.tabs(["매출 데이터 분석 도구", "상담원 실적 현황"])
+
+# 탭1: 매출 데이터 분석 도구
+with tab1:
+    # 타이틀 및 설명
+    st.title("매출 데이터 분석 도구")
+    st.markdown('<div class="dark-card"><p>이 도구는 엑셀 파일을 분석하여 매출 데이터를 계산하고 필터링할 수 있습니다. 업로드된 데이터에서 매출금액(VAT제외)을 계산하고 대분류별 집계를 수행합니다.</p></div>', unsafe_allow_html=True)
+
+    # 세션 상태 초기화
+    if 'df' not in st.session_state:
+        st.session_state.df = None
+    if 'filtered_df' not in st.session_state:
+        st.session_state.filtered_df = None
+    if 'analysis_df' not in st.session_state:
+        st.session_state.analysis_df = None
+    if 'copy_success' not in st.session_state:
+        st.session_state.copy_success = False
+
+    # 데이터프레임 날짜 칼럼 포맷팅 함수
+    def format_date_columns(df):
+        """
+        데이터프레임의 날짜 칼럼들을 yyyy-mm-dd 형식으로 변환
+        """
+        for col in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                # 화면 표시용 및 필터링용 문자열 날짜 칼럼 추가
+                formatted_col_name = f"{col}_formatted"
+                df[formatted_col_name] = df[col].dt.strftime('%Y-%m-%d')
+                
+        return df
+
+    # 파일 업로드
+    uploaded_file = st.file_uploader("엑셀 파일을 업로드하세요", type=['xlsx', 'xls'])
+
+    def process_datetime(dt):
+        # NaT 값 체크 먼저
+        if pd.isnull(dt):
+            return dt
+        
+        # 시간이 완전히 00:00:00이면 날짜만 반환
+        if dt.hour == 0 and dt.minute == 0 and dt.second == 0 and dt.microsecond == 0:
+            return dt.date()
+        
+        # 날짜가 1970-01-01이고 시간이 00:00:00이 아니면 시간만 반환
+        if dt.date() == pd.Timestamp('1970-01-01').date() and (dt.hour != 0 or dt.minute != 0 or dt.second != 0):
+            return dt.time()
+        
+        # 그 외의 경우 원래 datetime 반환
+        return dt
+
+    def process_excel(file):
+       """
+       엑셀 파일을 읽고 데이터를 전처리하는 함수
+       
+       매개변수:
+           file: 업로드된 엑셀 파일 객체
+           
+       반환값:
+           처리된 데이터프레임 또는 오류 메시지
+       """
+       try:
+           # 엑셀 파일 읽기
+           df = pd.read_excel(file, parse_dates=True)
+           
+           # 날짜/시간 컬럼에 대해 process_datetime 적용
+           date_time_columns = df.select_dtypes(include=['datetime64']).columns
+           
+           for col in date_time_columns:
+               df[col] = df[col].apply(process_datetime)
+           
+           # Total 행 체크 및 제거 (A열에 'Total'이 있는 행부터 모두 제거)
+           if 'Total' in df.iloc[:, 0].values:
+               total_idx = df.iloc[:, 0].eq('Total').idxmax()
+               df = df.iloc[:total_idx]
+           
+           # 빈 열 제거 (Unnamed 열 등)
+           df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+           
+           # VAT 세율 설정 - 1.1%
+           vat_rate = 0.011
+           
+           # 필요한 컬럼 확인 - 대분류 대신 품목명 사용
+           required_columns = ["월 렌탈 금액", "약정 기간 값", "총 패키지 할인 회차", 
+                              "판매 금액", "선납 렌탈 금액", "품목명"]
+                              
+           # 대분류 컬럼이 없고 품목명이 있으면 품목명 사용
+           has_product_name = "품목명" in df.columns
+           has_category = "대분류" in df.columns
+           
+           if has_product_name:
+               category_column = "품목명"
+           elif has_category:
+               category_column = "대분류"
+               # 대분류 컬럼을 품목명으로 복제
+               df["품목명"] = df["대분류"]
+           else:
+               return None, "품목명 또는 대분류 열이 필요합니다."
+           
+           # 필수 컬럼 확인 (품목명 제외)
+           missing_columns = [col for col in required_columns[:-1] if col not in df.columns]
+           if missing_columns:
+               return None, f"필요한 열이 없습니다: {', '.join(missing_columns)}"
+           
+           # 숫자형 변환 (품목명 제외한 모든 필수 컬럼)
+           for col in required_columns[:-1]:
+               df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+           
+           # 매출금액 계산 전 패키지 할인 회차 데이터 정제
+           # 39, 59, 60 값은 0으로 대체 (특정 비즈니스 규칙)
+           df['총 패키지 할인 회차'] = df['총 패키지 할인 회차'].replace([39, 59, 60], 0)
+           
+           # 매출금액 계산 공식
+           df['매출금액'] = (df['월 렌탈 금액'] * (df['약정 기간 값'] - df['총 패키지 할인 회차']) + 
+                          df['판매 금액'] + df['선납 렌탈 금액'])
+           
+           # VAT 제외 매출금액 계산
+           df['매출금액(VAT제외)'] = df['매출금액'] / (1 + vat_rate)
+           
+           # 날짜 컬럼 포맷팅
+           df = format_date_columns(df)
+           
+           return df, None
+       except Exception as e:
+           return None, f"파일 처리 중 오류가 발생했습니다: {str(e)}"
+
+    # 데이터 분석 함수
+    def analyze_data(df, filters=None):
+        """
+        데이터프레임을 분석하여 품목별 집계 결과를 생성하는 함수
+        
+        매개변수:
+            df: 분석할 데이터프레임
+            filters: 적용할 필터 딕셔너리 (선택적)
+            
+        반환값:
+            분석 결과 데이터프레임 또는 오류 메시지
+        """
+        try:
+            # 필터가 제공된 경우 데이터프레임 필터링
+            if filters:
+                for field, filter_value in filters.items():
+                    if pd.api.types.is_datetime64_any_dtype(df[field]):
+                        # 날짜 필드인 경우
+                        start_date, end_date = filter_value
+                        df = df[(df[field].dt.date >= start_date) & 
+                                (df[field].dt.date <= end_date)]
+                    
+                    elif pd.api.types.is_numeric_dtype(df[field]):
+                        # 숫자 필드인 경우
+                        min_val, max_val = filter_value
+                        df = df[(df[field] >= min_val) & 
+                                (df[field] <= max_val)]
+                    
+                    else:
+                        # 카테고리/문자열 필드인 경우
+                        df = df[df[field].isin(filter_value)]
+            
+            if '품목명' not in df.columns:
+                return None, "품목명 열이 없습니다."
+                
+            # 품목별 승인건수와 매출금액 집계
+            analysis = df.groupby('품목명').agg(
+                승인건수=('품목명', 'count'),
+                매출금액_VAT제외=('매출금액(VAT제외)', 'sum')
+            ).reset_index()
+            
+            # 지정된 순서로 정렬 (안마의자, 라클라우드, 정수기)
+            order = ['안마의자', '라클라우드', '정수기']
+            
+            # 카테고리형 변환 후 정렬
+            analysis['품목명'] = pd.Categorical(
+                analysis['품목명'], 
+                categories=order, 
+                ordered=True
+            )
+            analysis = analysis.sort_values('품목명')
+            
+            # 숫자 포맷팅 (천 단위 구분 기호 추가)
+            analysis['매출금액_VAT제외_포맷'] = analysis['매출금액_VAT제외'].apply(lambda x: f"{x:,.0f}")
+            
+            return analysis, None
+        except Exception as e:
+            return None, f"데이터 분석 중 오류가 발생했습니다: {str(e)}"
+
+    # 엑셀 다운로드 함수
+    def to_excel(df, analysis_df):
+        """
+        데이터프레임을 엑셀 파일로 변환하는 함수
+        
+        매개변수:
+            df: 원본 데이터프레임
+            analysis_df: 분석 결과 데이터프레임
+            
+        반환값:
+            엑셀 바이너리 데이터
+        """
+        try:
+            output = BytesIO()
+            writer = pd.ExcelWriter(output, engine='xlsxwriter')
+            
+            # 첫 번째 시트 - 승인건수 (필터링된 원본 데이터)
+            df.to_excel(writer, sheet_name='승인건수', index=False)
+            
+            # 두 번째 시트 - 분석데이터 (집계 결과)
+            analysis_for_excel = analysis_df.copy()
+            
+            # 포맷팅된 매출금액 컬럼 사용 (숫자 포맷팅 컬럼으로 대체)
+            if '매출금액_VAT제외_포맷' in analysis_for_excel.columns:
+                analysis_for_excel.rename(columns={'매출금액_VAT제외_포맷': '매출금액(VAT제외)'}, inplace=True)
+                analysis_for_excel.drop('매출금액_VAT제외', axis=1, inplace=True)
+            
+            # 임시 분석용 숫자 컬럼 제거
+            if '매출금액_숫자' in analysis_for_excel.columns:
+                analysis_for_excel.drop('매출금액_숫자', axis=1, inplace=True)
+            
+            # 분석 데이터 저장
+            analysis_for_excel.to_excel(writer, sheet_name='분석데이터', index=False)
+            
+            # 스타일 적용
+            workbook = writer.book
+            worksheet = writer.sheets['분석데이터']
+            
+            # 헤더 셀 스타일 정의
+            header_format = workbook.add_format({
+                'bold': True,
+                'text_wrap': True,
+                'valign': 'top',
+                'fg_color': '#D7E4BC',
+                'border': 1
+            })
+            
+            # 헤더 행에 스타일 적용
+            for col_num, value in enumerate(analysis_for_excel.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+            
+            # 컬럼 폭 자동 조정
+            for i, col in enumerate(analysis_for_excel.columns):
+                column_width = max(len(str(col)), analysis_for_excel[col].astype(str).str.len().max())
+                worksheet.set_column(i, i, column_width + 2)  # 여유 공간 추가
+            
+            writer.close()
+            processed_data = output.getvalue()
+            return processed_data
+        except Exception as e:
+            st.error(f"엑셀 파일 생성 중 오류가 발생했습니다: {str(e)}")
+            return None
+
+    def get_table_download_link(df, analysis_df, filename="분석_결과.xlsx"):
+        """
+        DataFrame을 엑셀 파일로 다운로드할 수 있는 링크 생성
+        
+        매개변수:
+            df: 원본 데이터프레임
+            analysis_df: 분석 결과 데이터프레임
+            filename: 다운로드될 파일명
+            
+        반환값:
+            HTML 다운로드 링크
+        """
+        val = to_excel(df, analysis_df)
+        if val is None:
+            return '<p class="error-message">엑셀 파일 생성에 실패했습니다.</p>'
+        
+        # 바이너리 데이터를 base64로 인코딩
+        b64 = base64.b64encode(val).decode()
+        href = f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}" class="download-button">엑셀 파일 다운로드</a>'
+        return href
+
+    def copy_to_clipboard(text):
+        """
+        텍스트를 클립보드에 복사하는 JavaScript 함수 생성
+        
+        매개변수:
+            text: 복사할 텍스트
+            
+        반환값:
+            JavaScript 코드를 포함한 HTML
+        """
+        if not isinstance(text, str):
+            text = str(text)  # 문자열로 변환
+
+        # HTML 특수 문자 처리 (XSS 방지)
+        safe_text = html.escape(text)
+        
+        # 클립보드 복사 JavaScript 코드
+        copy_js = f"""
+        <script>
+        function copyToClipboard() {{
+            const el = document.createElement('textarea');
+            el.value = `{safe_text}`;
+            document.body.appendChild(el);
+            el.select();
+            document.execCommand('copy');
+            document.body.removeChild(el);
+            
+            // 성공 메시지 표시
+            document.getElementById('copy-success').style.display = 'block';
+            setTimeout(() => {{
+                document.getElementById('copy-success').style.display = 'none';
+            }}, 3000);
+        }}
+        </script>
+        """
+        return copy_js
+
+    # 메인 로직
+    if uploaded_file is not None:
+        # 파일 처리 및 데이터프레임 생성
+        df, error = process_excel(uploaded_file)
+        st.session_state.df = df
+        
+        if error:
+            st.error(error)
+        else:
+            # 원본 데이터 표시
+            st.markdown('<div class="dark-card"><h3>원본 데이터</h3>', unsafe_allow_html=True)
+            st.write(f"총 {len(df)}개의 레코드가 로드되었습니다.")
+            
+            # AgGrid로 인터랙티브 테이블 표시
+            gb = GridOptionsBuilder.from_dataframe(df)
+            gb.configure_pagination(paginationAutoPageSize=True)
+            gb.configure_side_bar()
+            gb.configure_selection('multiple', use_checkbox=True)
+
+            # 날짜 컬럼 포맷 처리
+            for col in df.columns:
+                if pd.api.types.is_datetime64_any_dtype(df[col]):
+                    gb.configure_column(
+                        col,
+                        type=["dateColumnFilter", "customDateTimeFormat"],
+                        custom_format="%Y-%m-%d",  # 날짜만 표시
+                        valueFormatter='value ? value.substr(0, 10) : ""',  # JavaScript 포맷터로 날짜만 추출
+                        pivot=True
+                    )
+
+            # 시간 컬럼의 경우 별도로 처리
+            time_columns = [col for col in df.columns if pd.api.types.is_datetime64_any_dtype(df[col]) and 'time' in col.lower()]
+            for col in time_columns:
+                gb.configure_column(
+                    col,
+                    type=["dateColumnFilter", "customDateTimeFormat"],
+                    custom_format="%H:%M:%S",  # 시간만 표시
+                    valueFormatter='value ? value.substr(11, 8) : ""',  # JavaScript 포맷터로 시간만 추출
+                    pivot=True
+                )
+            
+            # 그룹화, 집계 기능 설정
+            gb.configure_default_column(groupable=True, value=True, enableRowGroup=True, aggFunc='sum', editable=True)
+            gridOptions = gb.build()
+            
+            # 데이터 그리드 표시
+            st.markdown('<div class="data-grid">', unsafe_allow_html=True)
+            grid_response = AgGrid(
+                df,
+                gridOptions=gridOptions,
+                update_mode=GridUpdateMode.MODEL_CHANGED,
+                height=400,
+                enable_enterprise_modules=True,
+                allow_unsafe_jscode=True
+            )
+            st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # 데이터 필터링 UI (접을 수 있는 섹션)
+            with st.expander("데이터 필터링", expanded=False):
+                # 필터링할 컬럼 선택
+                st.markdown("#### 필터링할 컬럼을 선택하세요")
+                cols = df.columns.tolist()
+                filter_cols = st.multiselect(
+                    "필터링할 컬럼 선택",
+                    options=cols,
+                    default=[]
+                )
+                
+                filtered_df = df.copy()
+                
+                if filter_cols:
+                    st.markdown('<div class="filter-container">', unsafe_allow_html=True)
+                    
+                    # 선택된 각 컬럼에 대한 필터 생성
+                    for col in filter_cols:
+                        st.markdown(f'<div class="filter-item"><h4>{col}</h4>', unsafe_allow_html=True)
+                        unique_values = df[col].unique().tolist()
+                        
+                        # 검색 기능 개선 - 검색 버튼 추가
+                        search_col1, search_col2 = st.columns([3, 1])
+                        with search_col1:
+                            search_term = st.text_input(f"{col} 검색", placeholder="검색어 입력...", key=f"search_{col}")
+                        with search_col2:
+                            st.markdown("<br>", unsafe_allow_html=True)  # 간격 조정
+                            search_button = st.button("검색", key=f"search_btn_{col}")
+
+                        # 검색어를 포함하는 값만 필터링
+                        if search_term:
+                            filtered_values = [val for val in unique_values if str(search_term).lower() in str(val).lower()]
+                            st.write(f"'{search_term}'을(를) 포함한 {len(filtered_values)}개의 항목이 표시됨")
+                        else:
+                            filtered_values = unique_values
+                        
+                        # 전체 선택/해제 옵션
+                        col1, col2 = st.columns([1, 3])
+                        
+                        with col1:
+                            select_all = st.checkbox(
+                                f"전체 선택", 
+                                value=True,
+                                key=f"all_{col}"
+                            )
+                        
+                        with col2:
+                            # 선택된 개수 표시
+                            selected_count = len(filtered_values) if select_all else 0
+                            st.write(f"선택됨: {selected_count}/{len(filtered_values)}")
+                        
+                        # 체크박스 영역 - 그리드 레이아웃 적용
+                        st.markdown('<div class="scroll-area">', unsafe_allow_html=True)
+
+                        selected_values = []
+
+                        # 화면 크기에 따라 컬럼 수 결정 (작은 화면일수록 적은 컬럼 사용)
+                        num_columns = 4  # 기본값으로 4열 사용
+
+                        # 전체 항목 중에서 검색어를 포함하는 항목만 필터링
+                        filtered_for_display = [val for val in unique_values 
+                                                if not search_term or str(search_term).lower() in str(val).lower()]
+
+                        # 검색 결과 표시
+                        if search_term:
+                            st.write(f"'{search_term}'을(를) 포함한 {len(filtered_for_display)}개의 항목이 표시됨")
+
+                        # 그리드 형태로 체크박스 배치
+                        grid_cols = st.columns(num_columns)
+                        for i, val in enumerate(filtered_values):
+                            val_str = str(val) if not pd.isna(val) else "빈 값"
+                            
+                            # 각 열에 체크박스 배치
+                            with grid_cols[i % num_columns]:
+                                is_checked = st.checkbox(
+                                    val_str, 
+                                    value=select_all,
+                                    key=f"cb_{col}_{val}"
+                                )
+                                
+                                if is_checked:
+                                    selected_values.append(val)
+                        
+                        st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # 선택된 값으로 필터링 (버튼 없이 즉시 적용)
+                        filtered_df = filtered_df[filtered_df[col].isin(selected_values)]
+                        
+                        st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # 필터가 적용된 데이터프레임 저장 (별도 버튼 없이)
+                    st.session_state.filtered_df = filtered_df
+                    
+                    # 필터링된 데이터 정보 표시
+                    st.write(f"현재 {len(filtered_df)}개의 레코드가 필터링되었습니다.")
+                else:
+                    # 필터가 적용되지 않은 경우 원본 데이터 사용
+                    filtered_df = df
+                    st.session_state.filtered_df = df
+            
+            # 분석 결과 표시
+            st.markdown('<div class="dark-card"><h3>분석 결과</h3>', unsafe_allow_html=True)
+            
+            # 현재 필터링된 데이터 기준으로 분석
+            current_df = st.session_state.filtered_df if 'filtered_df' in st.session_state else df
+            
+            # 분석 데이터 생성
+            analysis_df, analysis_error = analyze_data(current_df)
+            st.session_state.analysis_df = analysis_df
+            
+            if analysis_error:
+                st.error(analysis_error)
+            else:
+                # 데이터 요약 정보 표시
+                st.write(f"{len(current_df)}개의 레코드로 분석되었습니다.")
+                
+                # 분석 결과 테이블 표시
+                analysis_display = analysis_df.copy()
+                
+                # 데이터 포맷팅 - 가독성 개선
+                if '매출금액_VAT제외_포맷' in analysis_display.columns:
+                    analysis_display.rename(columns={'매출금액_VAT제외_포맷': '매출금액(VAT제외)'}, inplace=True)
+                    analysis_display.drop('매출금액_VAT제외', axis=1, inplace=True)
+                
+                # 임시 분석용 컬럼 제거
+                if '매출금액_숫자' in analysis_display.columns:
+                    analysis_display.drop('매출금액_숫자', axis=1, inplace=True)
+                
+                # 분석 결과 데이터프레임 표시
+                st.dataframe(analysis_display)
+                
+                # 클립보드 복사 기능 개선
+                st.markdown("### 분석 결과 복사")
+                st.markdown("아래 버튼을 클릭하여 분석 결과를 클립보드에 복사할 수 있습니다.")
+
+                # 복사할 텍스트 생성 (포맷 개선)
+                copy_text = "품목명\t승인건수\t매출금액(VAT제외)\n"  # 헤더 추가
+                for _, row in analysis_display.iterrows():
+                    copy_text += f"{row['품목명']}\t{row['승인건수']}\t{row['매출금액(VAT제외)']}\n"
+
+                # 복사 버튼 UI
+                st.markdown(copy_to_clipboard(copy_text), unsafe_allow_html=True)
+                copy_button_html = """
+                <button onclick="copyToClipboard()" class="copy-button">
+                    결과 클립보드에 복사
+                </button>
+                <div id="copy-success" style="display:none; color:green; margin-top:5px;">
+                    클립보드에 복사되었습니다!
+                </div>
+                """
+                st.markdown(copy_button_html, unsafe_allow_html=True)
+                
+                # 시각화와 다운로드 탭
+                # 시각화, 다운로드, 커스텀 분석 탭
+                visualization_tab, custom_analysis_tab, download_tab = st.tabs(["시각화", "커스텀 분석", "다운로드"])
+
+                
+                with visualization_tab:
+                    col1, col2 = st.columns(2)
+                    
+                    # 매출금액 숫자 컬럼 추가 (시각화 용도)
+                    if '매출금액_숫자' not in analysis_df.columns:
+                        analysis_df['매출금액_숫자'] = analysis_df['매출금액_VAT제외']
+                    
+                    with col1:
+                        # 승인건수 막대 그래프
+                        fig = px.bar(
+                            analysis_df, 
+                            x='품목명', 
+                            y='승인건수',
+                            text='승인건수',
+                            title='품목별 승인건수',
+                            color='품목명',
+                            color_discrete_sequence=px.colors.qualitative.G10
+                        )
+                        fig.update_layout(
+                            height=400,
+                            xaxis_title="품목명",
+                            yaxis_title="승인건수",
+                            font=dict(size=12)
+                        )
+                        fig.update_traces(texttemplate='%{text:,}', textposition='outside')
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col2:
+                        # 매출액 파이 차트
+                        fig2 = px.pie(
+                            analysis_df, 
+                            values='매출금액_숫자', 
+                            names='품목명',
+                            title='품목별 매출금액(VAT제외) 비율',
+                            color_discrete_sequence=px.colors.qualitative.G10
+                        )
+                        fig2.update_layout(
+                            height=400,
+                            font=dict(size=12)
+                        )
+                        fig2.update_traces(texttemplate='%{percent:.1%}', textinfo='label+percent')
+                        st.plotly_chart(fig2, use_container_width=True)
+                    
+                    # 종합 대시보드
+                    st.subheader("종합 대시보드")
+                    
+                    fig3 = go.Figure()
+                    
+                    fig3.add_trace(go.Bar(
+                        x=analysis_df['품목명'],
+                        y=analysis_df['승인건수'],
+                        name='승인건수',
+                        marker_color='indianred',
+                        text=analysis_df['승인건수'],
+                        texttemplate='%{text:,}',
+                        textposition='outside'
+                    ))
+                    
+                    fig3.add_trace(go.Scatter(
+                        x=analysis_df['품목명'],
+                        y=analysis_df['매출금액_숫자'],
+                        mode='lines+markers',
+                        name='매출금액(VAT제외)',
+                        marker_color='royalblue',
+                        yaxis='y2',
+                        text=analysis_df['매출금액_숫자'].apply(lambda x: f"{x:,.0f}"),
+                        textposition='top center'
+                    ))
+                    
+                    fig3.update_layout(
+                        title='품목별 승인건수 및 매출금액',
+                        xaxis=dict(title='품목명', tickfont=dict(size=12)),
+                        yaxis=dict(title='승인건수', side='left', tickformat=','),
+                        yaxis2=dict(title='매출금액(VAT제외)', side='right', overlaying='y', tickformat=','),
+                        legend=dict(x=0.1, y=1.1, orientation='h'),
+                        height=500,
+                        font=dict(size=12)
+                    )
+                    
+                    st.plotly_chart(fig3, use_container_width=True)
+                
+                with custom_analysis_tab:
+                    st.subheader("피벗 테이블 분석")
+                    
+                    # 좌우 레이아웃으로 구성
+                    config_col, result_col = st.columns([1, 2])
+                    
+                    with config_col:
+                        st.markdown("### 피벗 테이블 필드")
+                        
+                        # 사용 가능한 필드 분류
+                        all_fields = current_df.columns.tolist()
+                        dimension_fields = [col for col in all_fields 
+                                    if not pd.api.types.is_numeric_dtype(current_df[col])]
+                        measure_fields = [col for col in all_fields 
+                                    if pd.api.types.is_numeric_dtype(current_df[col])]
+                        
+                        # 필터 영역 추가
+                        st.markdown("#### 필터 필드")
+                        filter_fields = st.multiselect(
+                            "필터로 사용할 필드",
+                            options=all_fields,
+                            default=[]
+                        )
+                        
+                        # 필터 설정 UI
+                        filtered_data = current_df.copy()
+                        
+                        if filter_fields:
+                            st.markdown("##### 필터 설정:")
+                            
+                            for field in filter_fields:
+                                st.markdown(f"**{field}** 필터:")
+                                
+                                # 필드 타입에 따라 다른 필터 UI 제공
+                                if pd.api.types.is_datetime64_any_dtype(filtered_data[field]):
+                                    # 날짜 필드인 경우 날짜 범위 선택
+                                    min_date = filtered_data[field].min().date()
+                                    max_date = filtered_data[field].max().date()
+                                    
+                                    date_col1, date_col2 = st.columns(2)
+                                    with date_col1:
+                                        start_date = st.date_input(
+                                            "시작일",
+                                            value=min_date,
+                                            min_value=min_date,
+                                            max_value=max_date,
+                                            key=f"pivot_start_date_{field}"
+                                        )
+                                    with date_col2:
+                                        end_date = st.date_input(
+                                            "종료일",
+                                            value=max_date,
+                                            min_value=min_date,
+                                            max_value=max_date,
+                                            key=f"pivot_end_date_{field}"
+                                        )
+                                    
+                                    # 필터 적용
+                                    filtered_data = filtered_data[(filtered_data[field].dt.date >= start_date) & 
+                                                                (filtered_data[field].dt.date <= end_date)]
+                                    
+                                elif pd.api.types.is_numeric_dtype(filtered_data[field]):
+                                    # 숫자 필드인 경우 슬라이더
+                                    min_val = float(filtered_data[field].min())
+                                    max_val = float(filtered_data[field].max())
+                                    
+                                    value_range = st.slider(
+                                        "값 범위",
+                                        min_value=min_val,
+                                        max_value=max_val,
+                                        value=(min_val, max_val),
+                                        key=f"pivot_range_{field}"
+                                    )
+                                    
+                                    # 필터 적용
+                                    filtered_data = filtered_data[(filtered_data[field] >= value_range[0]) & 
+                                                                (filtered_data[field] <= value_range[1])]
+                                    
+                                else:
+                                    # 카테고리/문자열 필드인 경우 다중 선택
+                                    unique_values = filtered_data[field].dropna().unique()
+                                    
+                                    # 전체 선택/해제 옵션
+                                    select_all = st.checkbox(
+                                        "전체 선택",
+                                        value=True,
+                                        key=f"pivot_all_{field}"
+                                    )
+                                    
+                                    if select_all:
+                                        selected_values = list(unique_values)
+                                    else:
+                                        selected_values = st.multiselect(
+                                            "값 선택",
+                                            options=unique_values,
+                                            default=list(unique_values),
+                                            key=f"pivot_values_{field}"
+                                        )
+                                    
+                                    # 필터 적용
+                                    filtered_data = filtered_data[filtered_data[field].isin(selected_values)]
+                            
+                            # 필터 적용 후 레코드 수 표시
+                            st.write(f"필터 적용 후 {len(filtered_data)}개의 레코드가 선택되었습니다.")
+                        
+                        # 행 영역 (계층적 구조 지원)
+                        st.markdown("#### 행 필드")
+                        row_fields = st.multiselect(
+                            "행으로 사용할 필드 (순서대로 계층 구조가 적용됩니다)",
+                            options=dimension_fields,
+                            default=[]
+                        )
+                        
+                        # 열 영역
+                        st.markdown("#### 열 필드")
+                        column_fields = st.multiselect(
+                            "열로 사용할 필드",
+                            options=dimension_fields,
+                            default=[]
+                        )
+                        
+                        # 값 영역 (여러 값 지원)
+                        st.markdown("#### 값 필드")
+                        
+                        # 세션 상태로 값 필드 관리
+                        if 'value_fields' not in st.session_state:
+                            st.session_state.value_fields = []
+                            st.session_state.agg_functions = []
+                        
+                        # 필드와 집계 함수 선택 UI
+                        new_value_col1, new_value_col2, new_value_col3 = st.columns([2, 2, 1])
+                        
+                        with new_value_col1:
+                            new_value_field = st.selectbox(
+                                "값 필드",
+                                options=measure_fields,
+                                index=measure_fields.index('매출금액(VAT제외)') if '매출금액(VAT제외)' in measure_fields else 0
+                            )
+                        
+                        with new_value_col2:
+                            new_agg_function = st.selectbox(
+                                "집계 함수",
+                                options=["합계", "평균", "최댓값", "최솟값", "개수"],
+                                index=0
+                            )
+                        
+                        with new_value_col3:
+                            st.write(" ")
+                            st.write(" ")
+                            if st.button("추가", key="add_value"):
+                                # 중복 검사
+                                field_agg_pair = (new_value_field, new_agg_function)
+                                if field_agg_pair not in zip(st.session_state.value_fields, st.session_state.agg_functions):
+                                    st.session_state.value_fields.append(new_value_field)
+                                    st.session_state.agg_functions.append(new_agg_function)
+                                    st.rerun()
+                        
+                        # 추가된 값 필드 목록
+                        if st.session_state.value_fields:
+                            st.markdown("##### 추가된 값 필드:")
+                            for i, (field, agg) in enumerate(zip(st.session_state.value_fields, st.session_state.agg_functions)):
+                                col1, col2 = st.columns([4, 1])
+                                with col1:
+                                    st.markdown(f"**{i+1}.** {agg}: {field}")
+                                with col2:
+                                    if st.button("삭제", key=f"remove_{i}"):
+                                        st.session_state.value_fields.pop(i)
+                                        st.session_state.agg_functions.pop(i)
+                                        st.rerun()
+                        else:
+                            st.info("값 필드를 추가해주세요.")
+                        
+                        # 추가 옵션
+                        st.markdown("#### 추가 옵션")
+                        show_totals = st.checkbox("합계 표시", value=True)
+                        
+                    with result_col:
+                        # 피벗 테이블 결과 영역
+                        st.markdown("### 피벗 테이블 결과")
+                        
+                        # 필드가 선택되었는지 확인
+                        if not row_fields and not column_fields:
+                            st.info("분석을 시작하려면 행 또는 열 필드를 선택하세요.")
+                        elif not st.session_state.value_fields:
+                            st.info("분석을 시작하려면 값 필드를 추가하세요.")
+                        else:
+                            try:
+                                # 집계 함수 매핑
+                                agg_map = {
+                                    "합계": "sum",
+                                    "평균": "mean", 
+                                    "최댓값": "max",
+                                    "최솟값": "min",
+                                    "개수": "count"
+                                }
+                                
+                                # 집계 함수 딕셔너리 생성
+                                agg_dict = {}
+                                for field, agg in zip(st.session_state.value_fields, st.session_state.agg_functions):
+                                    agg_dict[field] = agg_map[agg]
+                                
+                                # 기존 pivot_table 사용
+                                pivot = pd.pivot_table(
+                                    filtered_data,  # 필터링된 데이터 사용
+                                    values=st.session_state.value_fields,
+                                    index=row_fields,
+                                    columns=column_fields,
+                                    aggfunc=agg_dict,
+                                    margins=show_totals,
+                                    margins_name="총합계"
+                                )
+                                
+                                # 결과 표시 (포맷팅 적용)
+                                st.dataframe(pivot.style.format("{:,.0f}"), height=600)
+                                
+                                # 다운로드 버튼
+                                csv = pivot.to_csv()
+                                st.download_button(
+                                    label="CSV 다운로드",
+                                    data=csv,
+                                    file_name="pivot_table.csv",
+                                    mime="text/csv",
+                                )
+                                
+                            except Exception as e:
+                                st.error(f"피벗 테이블 생성 중 오류가 발생했습니다: {str(e)}")
+                                st.info("행과 열 필드 구성을 확인해보세요. 데이터에 따라 일부 조합이 작동하지 않을 수 있습니다.")
+                
+                with download_tab:
+                    # 엑셀 다운로드 기능
+                    st.markdown("### 엑셀 파일 다운로드")
+                    st.markdown("아래 버튼을 클릭하여 데이터와 분석 결과를 엑셀 파일로 다운로드하세요.")
+                    st.markdown(get_table_download_link(current_df, analysis_df), unsafe_allow_html=True)
+                    
+                    # 다운로드 가이드
+                    st.markdown("""
+                    #### 다운로드 파일 내용:
+                    1. **승인건수** 시트: 필터링된 데이터와 매출금액(VAT제외) 컬럼이 포함된 원본 데이터
+                    2. **분석데이터** 시트: 대분류별 승인건수와 매출금액(VAT제외) 요약 데이터
+                    """)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        # 파일 업로드 전 안내 화면
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.info("엑셀 파일을 업로드하면 데이터 분석이 시작됩니다.")
+        
+        # 사용 가이드
+        st.markdown("""
+        ### 사용 가이드
+        1. 엑셀 파일을 업로드합니다.
+        2. 원본 데이터를 확인합니다.
+        3. 필요한 경우 '데이터 필터링' 섹션을 펼쳐 필터를 적용합니다.
+        4. 분석 결과 섹션에서 품목별 집계 결과를 확인합니다.
+        5. 시각화 탭에서 그래프로 분석 결과를 확인합니다.
+        6. 다운로드 탭에서 결과를 엑셀 파일로 내려받을 수 있습니다.
+        
+        ### 필수 컬럼
+        - 월 렌탈 금액
+        - 약정 기간 값
+        - 총 패키지 할인 회차
+        - 판매 금액
+        - 선납 렌탈 금액
+        - 대분류 또는 품목명
+        """)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # 페이지 하단 정보
+    st.markdown("""
+    <div style="text-align: center; margin-top: 30px; padding: 10px; color: #666;">
+        © 2025 매출 데이터 분석 도구 Made in BM | 버전 1.0.0
+    </div>
+    """, unsafe_allow_html=True)
+
+# 탭2: 상담원 실적 현황 (압축 버전)
+with tab2:
+    # datetime 모듈 임포트 추가
+    from datetime import datetime, timedelta
+    import requests
+    import xml.etree.ElementTree as ET
+    
+    # 공휴일 API 관련 정보
+    API_KEY = "98ZmBNqJKopiWlxH4hak1rclm30Dx1Ht3aGvPhs%2B90%2FW0Xf4zmisn2y7ebqbUiwfjLOMtgo4n48N9smQyhL7zQ%3D%3D"
+    URL = "http://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getHoliDeInfo"
+    
+    # 주요 법정 공휴일 (백업용)
+    FIXED_HOLIDAYS = {
+        # 양력 공휴일 (월, 일)
+        (1, 1): "신정",
+        (3, 1): "삼일절",
+        (5, 5): "어린이날",
+        (6, 6): "현충일",
+        (8, 15): "광복절",
+        (10, 3): "개천절",
+        (10, 9): "한글날",
+        (12, 25): "크리스마스"
+    }
+
+    # 2024년과 2025년의 설날과 추석 (음력 기반이라 매년 변동)
+    LUNAR_HOLIDAYS = {
+        # (년, 월, 일): 명칭
+        (2024, 2, 9): "설날 전날",
+        (2024, 2, 10): "설날",
+        (2024, 2, 11): "설날 다음날",
+        (2024, 9, 16): "추석 전날",
+        (2024, 9, 17): "추석",
+        (2024, 9, 18): "추석 다음날",
+        (2025, 1, 28): "설날 전날",
+        (2025, 1, 29): "설날",
+        (2025, 1, 30): "설날 다음날",
+        (2025, 10, 5): "추석 전날",
+        (2025, 10, 6): "추석",
+        (2025, 10, 7): "추석 다음날"
+    }
+
+    # 대체 공휴일 (확정된 날짜만 포함)
+    ALTERNATIVE_HOLIDAYS = [
+        # (년, 월, 일)
+        (2024, 5, 6),  # 어린이날 대체
+        (2025, 3, 3),  # 삼일절 대체
+        # 더 많은 대체 공휴일은 확정되는 대로 추가
+    ]
+    
+    # 공휴일 확인 함수
+    def is_holiday(date):
+        """
+        주어진 날짜가 공휴일인지 확인하는 함수
+        API 호출 실패 시 백업 공휴일 데이터 사용
+        """
+        year = date.year
+        month = date.month
+        day = date.day
+        date_tuple = (year, month, day)
+        
+        # 주말 체크 (토요일: 5, 일요일: 6)
+        if date.weekday() >= 5:
+            return True
+        
+        # 법정 공휴일 체크 (백업 데이터)
+        if (month, day) in FIXED_HOLIDAYS:
+            return True
+        
+        # 설날/추석 체크 (백업 데이터)
+        if date_tuple in LUNAR_HOLIDAYS:
+            return True
+        
+        # 대체 공휴일 체크 (백업 데이터)
+        if date_tuple in ALTERNATIVE_HOLIDAYS:
+            return True
+        
+        # API 호출을 통한 공휴일 체크
+        try:
+            # API 요청 파라미터 설정
+            params = {
+                'serviceKey': API_KEY,
+                'solYear': year,
+                'solMonth': f"{month:02d}"
+            }
+            
+            # API 요청
+            response = requests.get(URL, params=params)
+            
+            # 응답이 비어있는지 확인
+            if not response.content:
+                return False
+            
+            # XML 응답 파싱
+            root = ET.fromstring(response.content)
+            
+            # 응답 구조 확인 및 공휴일 검사
+            items = root.find('.//items')
+            if items is None:
+                # items 요소가 없으면 공휴일 정보가 없는 것으로 간주
+                return False
+                
+            # 공휴일 목록 순회
+            for item in items.findall('./item'):
+                # 공휴일 날짜 가져오기 (yyyyMMdd 형식)
+                locdate_elem = item.find('locdate')
+                if locdate_elem is not None and locdate_elem.text:
+                    locdate = locdate_elem.text
+                    holiday_date = datetime.strptime(locdate, '%Y%m%d').date()
+                    
+                    # 주어진 날짜와 일치하는지 확인
+                    if date.date() == holiday_date:
+                        return True
+                
+            return False
+            
+        except Exception as e:
+            st.warning(f"공휴일 API 호출 실패: {str(e)} - 백업 데이터로 대체합니다.")
+            # 오류 발생 시 백업 공휴일 데이터만 사용 (주말은 이미 위에서 처리)
+            return False
+    
+    # 이전 영업일 찾기 함수
+    def get_previous_business_day(current_date):
+        """
+        현재 날짜 기준 이전 영업일(평일 & 공휴일 아님)을 찾는 함수
+        """
+        # 하루 전부터 시작
+        previous_day = current_date - timedelta(days=1)
+        
+        # 영업일(평일 & 공휴일 아님)을 찾을 때까지 하루씩 이동
+        while is_holiday(previous_day):
+            previous_day = previous_day - timedelta(days=1)
+        
+        return previous_day
+    
+    # 타이틀 및 설명
+    st.title("상담원 실적 현황")
+    st.markdown('<div class="dark-card"><p>이 도구는 상담원의 실적 현황을 분석하고 시각화합니다. 상담주문계약내역과 콜타임 파일을 업로드하여 상담원별 실적을 확인할 수 있습니다.</p></div>', unsafe_allow_html=True)
+
+    # 세션 상태 초기화 (기존 코드와 동일)
+    if 'consultant_df' not in st.session_state:
+        st.session_state.consultant_df = None
+    if 'calltime_df' not in st.session_state:
+        st.session_state.calltime_df = None
+    if 'performance_df' not in st.session_state:
+        st.session_state.performance_df = None
+
+    # 날짜 형식 변환 함수 (기존 코드와 동일)
+    def format_time(seconds):
+        """초를 HH:MM:SS 형식으로 변환"""
+        if pd.isna(seconds) or seconds == 0:
+            return "0:00:00"
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+
+    # 파일 내용 미리보기 함수
+    def peek_file_content(file, n_bytes=1000):
+        """파일의 처음 n_bytes를 보여주는 함수"""
+        try:
+            file.seek(0)
+            content = file.read(n_bytes)
+            if isinstance(content, bytes):
+                # 여러 인코딩 시도
+                encodings = ['utf-8', 'cp949', 'euc-kr', 'latin1']
+                for encoding in encodings:
+                    try:
+                        return content.decode(encoding)
+                    except UnicodeDecodeError:
+                        continue
+                # 모든 인코딩 실패 시 무시하고 디코딩
+                return content.decode('utf-8', errors='ignore')
+            return str(content)
+        except Exception as e:
+            return f"파일 내용 확인 중 오류 발생: {str(e)}"
+            
+    # 상담주문계약내역 파일 처리 함수
+    def process_consultant_file(file):
+        """상담주문계약내역 엑셀 파일을 처리하는 함수"""
+        try:
+            # 파일 포인터 초기화
+            file.seek(0)
+            
+            # 먼저 바이너리 데이터 읽기
+            file_bytes = file.read()
+            file_like = io.BytesIO(file_bytes)
+            
+            # 다양한 방법으로 파일 읽기 시도
+            df = None
+            errors = []
+            
+            # 1. 기본 방법으로 시도
+            try:
+                file_like.seek(0)
+                df = pd.read_excel(file_like, header=2)
+                
+                # 수동으로 중복 컬럼 처리
+                if df is not None:
+                    # 컬럼 리스트 확인
+                    cols = df.columns.tolist()
+                    # 중복된 컬럼 확인
+                    dupes = set([x for x in cols if cols.count(x) > 1])
+                    if dupes:
+                        # 중복 컬럼 수정 - 수동으로 번호 부여
+                        new_cols = []
+                        seen = {}
+                        for col in cols:
+                            if col in dupes:
+                                if col not in seen:
+                                    seen[col] = 0
+                                else:
+                                    seen[col] += 1
+                                new_cols.append(f"{col}.{seen[col]}")
+                            else:
+                                new_cols.append(col)
+                        # 새 컬럼 이름 적용
+                        df.columns = new_cols
+                        
+            except Exception as e:
+                errors.append(f"기본 방법 실패: {str(e)}")
+            
+            # 2. xlrd 엔진으로 시도
+            if df is None:
+                try:
+                    file_like.seek(0)
+                    df = pd.read_excel(file_like, header=2, engine='xlrd')
+                    
+                    # 수동으로 중복 컬럼 처리
+                    if df is not None:
+                        # 컬럼 리스트 확인
+                        cols = df.columns.tolist()
+                        # 중복된 컬럼 확인
+                        dupes = set([x for x in cols if cols.count(x) > 1])
+                        if dupes:
+                            # 중복 컬럼 수정 - 수동으로 번호 부여
+                            new_cols = []
+                            seen = {}
+                            for col in cols:
+                                if col in dupes:
+                                    if col not in seen:
+                                        seen[col] = 0
+                                    else:
+                                        seen[col] += 1
+                                    new_cols.append(f"{col}.{seen[col]}")
+                                else:
+                                    new_cols.append(col)
+                            # 새 컬럼 이름 적용
+                            df.columns = new_cols
+                    
+                except Exception as e:
+                    errors.append(f"xlrd 엔진 실패: {str(e)}")
+            
+            # 3. openpyxl 엔진으로 시도
+            if df is None:
+                try:
+                    file_like.seek(0)
+                    df = pd.read_excel(file_like, header=2, engine='openpyxl')
+                    
+                    # 수동으로 중복 컬럼 처리
+                    if df is not None:
+                        # 컬럼 리스트 확인
+                        cols = df.columns.tolist()
+                        # 중복된 컬럼 확인
+                        dupes = set([x for x in cols if cols.count(x) > 1])
+                        if dupes:
+                            # 중복 컬럼 수정 - 수동으로 번호 부여
+                            new_cols = []
+                            seen = {}
+                            for col in cols:
+                                if col in dupes:
+                                    if col not in seen:
+                                        seen[col] = 0
+                                    else:
+                                        seen[col] += 1
+                                    new_cols.append(f"{col}.{seen[col]}")
+                                else:
+                                    new_cols.append(col)
+                            # 새 컬럼 이름 적용
+                            df.columns = new_cols
+                    
+                except Exception as e:
+                    errors.append(f"openpyxl 엔진 실패: {str(e)}")
+            
+            # 모든 방법이 실패한 경우
+            if df is None:
+                error_details = "\n".join(errors)
+                return None, f"계약내역 파일을 읽을 수 없습니다. 다음 형식을 시도했으나 모두 실패했습니다:\n{error_details}"
+            
+            # 필요한 컬럼 확인
+            required_columns = ["상담사", "상담사 조직", "대분류"]
+            
+            # 컬럼명이 비슷한 경우 매핑
+            column_mapping = {}
+            for req_col in required_columns:
+                if req_col in df.columns:
+                    continue  # 이미 존재하면 매핑 불필요
+                    
+                # 유사한 컬럼명 목록
+                similar_cols = {
+                    "상담사": ["상담원", "상담원명", "직원명", "사원명", "담당자"],
+                    "상담사 조직": ["조직", "부서", "팀", "상담팀", "부서명"],
+                    "대분류": ["제품", "품목", "상품", "상품명", "제품명", "품목명", "카테고리"]
+                }
+                
+                if req_col in similar_cols:
+                    # 유사한 컬럼 찾기
+                    for col in df.columns:
+                        col_str = str(col).lower()
+                        if any(term.lower() in col_str for term in similar_cols[req_col]):
+                            column_mapping[col] = req_col
+                            break
+            
+            # 컬럼명 변경
+            if column_mapping:
+                df = df.rename(columns=column_mapping)
+            
+            # 필요한 컬럼 확인 재검사
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                # 대분류 컬럼 특별 처리 - 중복이면 .0 버전 확인 (우리가 수동으로 부여한 인덱스)
+                if "대분류" in missing_columns and "대분류.0" in df.columns:
+                    df["대분류"] = df["대분류.0"]
+                    missing_columns.remove("대분류")
+                # 또는 .1 버전 확인 (pandas가 자동으로 부여한 인덱스)
+                elif "대분류" in missing_columns and "대분류.1" in df.columns:
+                    df["대분류"] = df["대분류.1"]
+                    missing_columns.remove("대분류")
+                
+                if missing_columns:  # 여전히 누락된 컬럼이 있으면
+                    available_columns = ", ".join(df.columns.tolist()[:20]) + "..."  # 처음 20개만 표시
+                    return None, f"계약내역 파일에 필요한 열이 없습니다: {', '.join(missing_columns)}\n사용 가능한 컬럼 일부: {available_columns}"
+            
+            # 필수 컬럼만 선택 (판매 유형 컬럼 포함)
+            needed_columns = ["상담사", "상담사 조직", "대분류"]
+            
+            # 캠페인 컬럼이 있다면 추가
+            if '캠페인' in df.columns:
+                needed_columns.append('캠페인')
+                
+            # 판매 유형 컬럼이 있다면 추가
+            if '판매 유형' in df.columns:
+                needed_columns.append('판매 유형')
+            
+            subset_df = df[needed_columns].copy()
+            
+            # NaN 값을 가진 행 제거
+            subset_df = subset_df.dropna(subset=["상담사"])
+            
+            return subset_df, None
+            
+        except Exception as e:
+            return None, f"상담주문계약내역 파일 처리 중 오류가 발생했습니다: {str(e)}"
+
+    # 콜타임 파일 처리 함수
+    def process_calltime_file(file):
+        """콜타임 엑셀 파일을 처리하는 함수"""
+        try:
+            # 파일 포인터 초기화
+            file.seek(0)
+            
+            # 먼저 엑셀 파일로 읽기 시도
+            try:
+                # 일반 엑셀 파일로 시도
+                df = pd.read_excel(file)
+                
+                # 이미지에서 확인된 구조에 따라 필요한 컬럼 매핑
+                # 상담원명은 B열(인덱스 1), 총 건수는 AA열, 총 시간은 AB열
+                if len(df.columns) >= 28:  # AA와 AB 열이 존재하는지 확인 (A=0, B=1, ... Z=25, AA=26, AB=27)
+                    # 필요한 데이터 추출
+                    name_col = df.columns[1]  # 상담원명 (B열)
+                    count_col = df.columns[26]  # 총 건수 (AA열)
+                    time_col = df.columns[27]  # 총 시간 (AB열)
+                    
+                    # 필요한 데이터 추출
+                    result_df = pd.DataFrame({
+                        '상담원명': df[name_col],
+                        '총 건수': df[count_col],
+                        '총 시간': df[time_col]
+                    })
+                    
+                    # 숫자가 아닌 행 제거 (헤더, 합계 등)
+                    result_df = result_df[pd.to_numeric(result_df['총 건수'], errors='coerce').notnull()]
+                    
+                    # 누락된 데이터 행 제거
+                    result_df = result_df.dropna(subset=['상담원명'])
+                    
+                    # "상담원ID"나 "합계" 같은 값을 가진 행 제거
+                    invalid_patterns = ['상담원ID', '상담원 ID', '합계', '합 계', '총계', '총 계']
+                    for pattern in invalid_patterns:
+                        result_df = result_df[~result_df['상담원명'].astype(str).str.contains(pattern)]
+                    
+                    # 0:00:00이나 '0' 값을 가진 시간은 제거
+                    zero_time_patterns = ['0:00:00', '00:00:00', '0']
+                    result_df = result_df[~result_df['총 시간'].astype(str).isin(zero_time_patterns)].copy()
+                    
+                    # 시간을 초로 변환
+                    def time_to_seconds(time_str):
+                        try:
+                            if pd.isna(time_str):
+                                return 0
+                            
+                            time_str = str(time_str)
+                            time_parts = re.findall(r'\d+', time_str)
+                            
+                            if not time_parts:
+                                return 0
+                                
+                            # 시간 형식에 따라 변환
+                            if len(time_parts) == 3:  # HH:MM:SS
+                                h, m, s = map(int, time_parts)
+                                return h * 3600 + m * 60 + s
+                            elif len(time_parts) == 2:  # MM:SS
+                                m, s = map(int, time_parts)
+                                return m * 60 + s
+                            else:
+                                return int(time_parts[0])
+                        except:
+                            return 0
+                    
+                    result_df['총 시간_초'] = result_df['총 시간'].apply(time_to_seconds)
+                    
+                    return result_df, None
+                else:
+                    return None, f"필요한 컬럼을 찾을 수 없습니다. 컬럼 수: {len(df.columns)}"
+                    
+            except Exception as excel_err:
+                # Excel 파싱 실패, HTML 테이블로 시도
+                try:
+                    file.seek(0)
+                    file_bytes = file.read()
+                    content = file_bytes.decode('utf-8', errors='ignore')
+                    
+                    if '<table' in content:
+                        # HTML에서 행 추출
+                        rows = re.findall(r'<tr.*?>(.*?)</tr>', content, re.DOTALL)
+                        
+                        # 모든 행과 셀 정보 수집
+                        all_rows = []
+                        for row in rows:
+                            cells = re.findall(r'<td.*?>(.*?)</td>', row, re.DOTALL)
+                            if cells:
+                                all_rows.append(cells)
+                        
+                        if not all_rows:
+                            return None, "HTML 테이블에서 데이터를 추출할 수 없습니다."
+                        
+                        # 헤더 정보와 데이터 행 분리
+                        header_rows = all_rows[:2]  # 첫 두 행은 헤더
+                        data_rows = all_rows[2:]    # 나머지는 데이터
+                        
+                        # 각 데이터 행의 세번째 열부터는 시간 데이터, 마지막 두 열은 총 건수와 총 시간
+                        result_data = []
+                        for row in data_rows:
+                            if len(row) < 3:
+                                continue
+                            
+                            name = row[1]  # 두 번째 열은 상담원명
+                            
+                            # "합계" 행이나 공백 행은 건너뛰기
+                            if name.strip() in ['합계', '합 계', '총계', '총 계', ''] or '상담원' in name:
+                                continue
+                            
+                            # 마지막 두 열이 총 건수와 총 시간
+                            if len(row) >= 28:  # AA열(27)과 AB열(28)
+                                count = row[-2]  # AA열
+                                time = row[-1]   # AB열
+                                
+                                # 숫자와 시간 형식 검증
+                                try:
+                                    count = int(re.sub(r'[^\d]', '', count))
+                                    
+                                    # 0:00:00 시간은 제외
+                                    if time not in ['0:00:00', '00:00:00', '0']:
+                                        # 시간을 초로 변환
+                                        time_parts = re.findall(r'\d+', time)
+                                        if len(time_parts) == 3:  # HH:MM:SS
+                                            h, m, s = map(int, time_parts)
+                                            seconds = h * 3600 + m * 60 + s
+                                        elif len(time_parts) == 2:  # MM:SS
+                                            m, s = map(int, time_parts)
+                                            seconds = m * 60 + s
+                                        else:
+                                            seconds = 0
+                                        
+                                        result_data.append({
+                                            '상담원명': name,
+                                            '총 건수': count,
+                                            '총 시간': time,
+                                            '총 시간_초': seconds
+                                        })
+                                except:
+                                    continue
+                        
+                        # 결과 데이터프레임 생성
+                        if result_data:
+                            result_df = pd.DataFrame(result_data)
+                            return result_df, None
+                        else:
+                            return None, "유효한 상담원 데이터를 추출할 수 없습니다."
+                    else:
+                        return None, "HTML 테이블을 찾을 수 없습니다."
+                        
+                except Exception as html_err:
+                    return None, f"파일 처리 중 오류가 발생했습니다: Excel - {str(excel_err)}, HTML - {str(html_err)}"
+                    
+        except Exception as e:
+            return None, f"콜타임 파일 처리 중 오류가 발생했습니다: {str(e)}"
+
+    # 상담원 실적 분석 함수
+    def analyze_consultant_performance(consultant_df, calltime_df):
+        """상담원 실적을 분석하는 함수"""
+        try:
+            # 데이터 검증
+            if consultant_df.empty or calltime_df.empty:
+                return None, "데이터가 비어 있습니다."
+            
+            # 온라인 팀 상담원 목록
+            online_consultants = ['김부자', '최진영']
+            
+            # 상담원 목록 (콜타임 데이터 기준)
+            consultants = calltime_df["상담원명"].unique().tolist()
+            
+            # 결과 데이터프레임을 위한 리스트
+            result_data = []
+            
+            # 각 상담원별 대분류 집계
+            for consultant in consultants:
+                try:
+                    # 상담원명이 문자열인지 확인
+                    if not isinstance(consultant, str):
+                        continue
+                        
+                    # 상담원명에 비정상적인 값이 있는지 확인 
+                    if consultant in ['휴식', '후처리', '대기', '기타', '합계', '00:00:00', '0:00:00']:
+                        continue
+                    
+                    # 상담사 컬럼 매핑 (이름이 정확히 일치하지 않을 수 있음)
+                    exact_match = consultant_df[consultant_df["상담사"] == consultant]
+                    
+                    # 정확히 일치하는 데이터가 없으면 유사 매칭 시도
+                    if exact_match.empty:
+                        # 상담원명 전처리
+                        consultant_clean = consultant.strip()
+                        
+                        # 포함 관계 확인
+                        matches = []
+                        for idx, row in consultant_df.iterrows():
+                            consultant_name = str(row["상담사"]).strip()
+                            # 상담원명이 포함되거나 상담원명에 포함되는 경우
+                            if (consultant_clean in consultant_name) or (consultant_name in consultant_clean):
+                                matches.append(idx)
+                        
+                        consultant_data = consultant_df.loc[matches] if matches else pd.DataFrame(columns=consultant_df.columns)
+                    else:
+                        consultant_data = exact_match
+                    
+                    # 상담사 조직 정보 결정
+                    if consultant in online_consultants:
+                        organization = "온라인파트"
+                    elif not consultant_data.empty:
+                        organization = consultant_data["상담사 조직"].iloc[0]
+                    else:
+                        organization = "CRM파트"  # 기본값을 CRM파트로 설정
+                    
+                    # 캠페인이 비어있지 않은 데이터만 필터링
+                    if not consultant_data.empty and '캠페인' in consultant_data.columns:
+                        consultant_data = consultant_data[~consultant_data['캠페인'].isna()]
+                    
+                    # 5가지 분류로 나누어 카운트
+                    anma_count = 0
+                    lacloud_count = 0
+                    water_count = 0
+                    thecare_count = 0
+                    membership_count = 0
+                    
+                    if not consultant_data.empty:
+                        # 판매 유형 컬럼이 있는지 확인
+                        has_sale_type = '판매 유형' in consultant_data.columns
+                        
+                        # 각 행에 대해 판매 유형과 대분류에 따라 분류
+                        for idx, row in consultant_data.iterrows():
+                            sale_type = str(row.get('판매 유형', '')).lower() if has_sale_type else ''
+                            category = str(row.get('대분류', '')).lower()
+                            
+                            # 판매 유형에 '케어'가 포함되면 더케어로 분류
+                            if '케어' in sale_type:
+                                thecare_count += 1
+                            # 판매 유형에 '멤버십'이 포함되면 멤버십으로 분류
+                            elif '멤버십' in sale_type or '멤버쉽' in sale_type:
+                                membership_count += 1
+                            # 그 외에는 대분류에 따라 분류
+                            elif '안마의자' in category:
+                                anma_count += 1
+                            elif '라클라우드' in category:
+                                lacloud_count += 1
+                            elif '정수기' in category:
+                                water_count += 1
+                    
+                    # 총 건수
+                    total_count = anma_count + lacloud_count + water_count + thecare_count + membership_count
+                    
+                    # 콜타임 정보
+                    call_count = calltime_df.loc[calltime_df["상담원명"] == consultant, "총 건수"].iloc[0]
+                    call_time = calltime_df.loc[calltime_df["상담원명"] == consultant, "총 시간"].iloc[0]
+                    call_time_seconds = calltime_df.loc[calltime_df["상담원명"] == consultant, "총 시간_초"].iloc[0]
+                    
+                    # 결과 리스트에 추가
+                    result_data.append({
+                        "상담사": consultant,
+                        "조직": organization,
+                        "안마의자": anma_count,
+                        "라클라우드": lacloud_count,
+                        "정수기": water_count,
+                        "더케어": thecare_count,
+                        "멤버십": membership_count,
+                        "건수": total_count,
+                        "콜건수": call_count,
+                        "콜타임": call_time,
+                        "콜타임_초": call_time_seconds
+                    })
+                    
+                except Exception as e:
+                    # 오류 발생 시 처리 계속 진행
+                    pass
+            
+            # 결과 데이터프레임 생성
+            if not result_data:
+                return None, "유효한 상담원 데이터를 생성할 수 없습니다."
+                
+            result_df = pd.DataFrame(result_data)
+            
+            # 조직별 그룹화 및 정렬 (건수 내림차순, 콜타임 내림차순)
+            result_df = result_df.sort_values(by=["조직", "건수", "콜타임_초"], ascending=[True, False, False])
+            
+            return result_df, None
+            
+        except Exception as e:
+            return None, f"상담원 실적 분석 중 오류가 발생했습니다: {str(e)}"
+    
+    # 공간 절약을 위한 파일 업로드 UI 간소화
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("데이터 파일 업로드")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### 상담주문계약내역 첨부")
+        consultant_file = st.file_uploader("상담주문계약내역 엑셀 파일을 업로드하세요", type=['xlsx', 'xls'], key="consultant_file")
+    
+    with col2:
+        st.markdown("### 콜타임 첨부")
+        calltime_file = st.file_uploader("콜타임 엑셀 파일을 업로드하세요", type=['xlsx', 'xls'], key="calltime_file")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # 컴팩트한 HTML 테이블 생성 함수
+    def generate_compact_html_table(df):
+        """컴팩트한 HTML 테이블 생성 함수"""
+        html = '''
+        <style>
+        .table-container {
+            width: 50%;  /* 데스크톱에서는 50% 너비로 제한 */
+            margin: 0 auto;  /* 중앙 정렬 */
+            overflow-x: auto;  /* 모바일에서 가로 스크롤 가능하게 */
+        }
+        
+        /* 모바일 환경에서는 컨테이너를 100% 너비로 확장 */
+        @media (max-width: 768px) {
+            .table-container {
+                width: 100%;
+            }
+        }
+        
+        .compact-table {
+            border-collapse: collapse;
+            font-size: 0.7em;  /* 더 작은 폰트 크기 */
+            width: 100%;  /* 컨테이너 내에서 100% */
+            table-layout: fixed;
+            margin: 0 auto;
+        }
+        .compact-table thead tr {
+            background-color: #262730;
+            color: white;
+            text-align: center;
+            font-weight: bold;
+        }
+        .compact-table th, .compact-table td {
+            padding: 2px 3px;  /* 패딩 최소화 */
+            text-align: center;
+            border: 1px solid #444;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .compact-table tbody tr {
+            background-color: #1E1E1E;
+            color: white;
+        }
+        .compact-table tbody tr:nth-of-type(even) {
+            background-color: #2D2D2D;
+        }
+        .compact-table tbody tr.summary-row {
+            background-color: #2E4053;
+            color: white;
+            font-weight: bold;
+        }
+        /* 컬럼 너비 최적화 */
+        .compact-table th:nth-child(1), .compact-table td:nth-child(1) { width: 3%; }  /* 순위 */
+        .compact-table th:nth-child(2), .compact-table td:nth-child(2) { width: 7%; }  /* 상담사 */
+        .compact-table th:nth-child(3), .compact-table td:nth-child(3),
+        .compact-table th:nth-child(4), .compact-table td:nth-child(4),
+        .compact-table th:nth-child(5), .compact-table td:nth-child(5),
+        .compact-table th:nth-child(6), .compact-table td:nth-child(6),
+        .compact-table th:nth-child(7), .compact-table td:nth-child(7) { width: 4%; }  /* 제품 카테고리 */
+        .compact-table th:nth-child(8), .compact-table td:nth-child(8) { width: 3%; }  /* 건수 */
+        .compact-table th:nth-child(9), .compact-table td:nth-child(9) { width: 5%; }  /* 콜건수 */
+        .compact-table th:nth-child(10), .compact-table td:nth-child(10) { width: 6%; }  /* 콜타임 */
+        
+        /* 간소화된 헤더 */
+        .compact-table th:nth-child(3)::after { content: "안마"; }
+        .compact-table th:nth-child(3) span { display: none; }
+        .compact-table th:nth-child(4)::after { content: "라클"; }
+        .compact-table th:nth-child(4) span { display: none; }
+        .compact-table th:nth-child(5)::after { content: "정수기"; }
+        .compact-table th:nth-child(5) span { display: none; }
+        .compact-table th:nth-child(6)::after { content: "더케어"; }
+        .compact-table th:nth-child(6) span { display: none; }
+        .compact-table th:nth-child(7)::after { content: "멤버쉽"; }
+        .compact-table th:nth-child(7) span { display: none; }
+        </style>
+        
+        <div class="table-container">
+        <table class="compact-table">
+        '''
+        
+        # 헤더 추가
+        headers = [
+            '순위', 
+            '상담사', 
+            '<span>안마의자</span>', 
+            '<span>라클라우드</span>', 
+            '<span>정수기</span>', 
+            '<span>더케어</span>', 
+            '<span>멤버십</span>', 
+            '건수', 
+            '콜건수', 
+            '콜타임'
+        ]
+        html += '<thead><tr>'
+        for header in headers:
+            html += f'<th>{header}</th>'
+        html += '</tr></thead>'
+        
+        # 본문 데이터 추가
+        html += '<tbody>'
+        
+        # CRM 파트 먼저 처리
+        crm_df = df[df['조직'] == 'CRM파트'].sort_values(by=['건수', '콜타임_초'], ascending=[False, False])
+        row_num = 1
+        for i, row in crm_df.iterrows():
+            # CRM 요약인지 확인
+            is_summary = row['상담사'] == 'CRM팀순위'
+            row_class = 'summary-row' if is_summary else ''
+            
+            html += f'<tr class="{row_class}">'
+            # 순위 부여
+            rank = "총합/평균" if is_summary else row_num
+            html += f'<td>{rank}</td>'
+            
+            # 상담사 이름
+            html += f'<td>{row["상담사"]}</td>'
+            
+            # 안마의자, 라클라우드, 정수기, 더케어, 멤버십
+            for col in ['안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수']:
+                value = row[col]
+                # 0 값을 '-'로 변환
+                value = '-' if value == 0 else value
+                html += f'<td>{value}</td>'
+            
+            # 콜건수, 콜타임
+            html += f'<td>{row["콜건수"]}</td>'
+            html += f'<td>{row["콜타임"]}</td>'
+            html += '</tr>'
+            
+            if not is_summary:
+                row_num += 1
+        
+        # CRM 요약 추가
+        crm_summary = {
+            "순위": "총합/평균",
+            "상담사": "CRM팀순위",
+            "안마의자": crm_df["안마의자"].sum(),
+            "라클라우드": crm_df["라클라우드"].sum(),
+            "정수기": crm_df["정수기"].sum(),
+            "더케어": crm_df["더케어"].sum(),
+            "멤버십": crm_df["멤버십"].sum(),
+            "건수": crm_df["건수"].sum(),
+            "콜건수": round(crm_df["콜건수"].mean(), 1),
+            # 평균 콜타임 초를 계산하고 format_time 함수로 변환
+            "콜타임": format_time(crm_df["콜타임_초"].mean())
+        }
+        
+        html += '<tr class="summary-row">'
+        html += '<td>총합/평균</td>'
+        html += f'<td>{crm_summary["상담사"]}</td>'
+        for col in ['안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수']:
+            value = crm_summary[col]
+            value = '-' if value == 0 else value
+            html += f'<td>{value}</td>'
+        html += f'<td>{crm_summary["콜건수"]}</td>'
+        html += f'<td>{crm_summary["콜타임"]}</td>'
+        html += '</tr>'
+        
+        # 온라인 파트 처리
+        online_df = df[df['조직'] == '온라인파트'].sort_values(by=['건수', '콜타임_초'], ascending=[False, False])
+        row_num = 1
+        for i, row in online_df.iterrows():
+            # 온라인 요약인지 확인
+            is_summary = row['상담사'] == '온라인팀순위'
+            row_class = 'summary-row' if is_summary else ''
+            
+            html += f'<tr class="{row_class}">'
+            # 순위 부여
+            rank = "총합/평균" if is_summary else row_num
+            html += f'<td>{rank}</td>'
+            
+            # 상담사 이름
+            html += f'<td>{row["상담사"]}</td>'
+            
+            # 안마의자, 라클라우드, 정수기, 더케어, 멤버십
+            for col in ['안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수']:
+                value = row[col]
+                # 0 값을 '-'로 변환
+                value = '-' if value == 0 else value
+                html += f'<td>{value}</td>'
+            
+            # 콜건수, 콜타임
+            html += f'<td>{row["콜건수"]}</td>'
+            html += f'<td>{row["콜타임"]}</td>'
+            html += '</tr>'
+            
+            if not is_summary:
+                row_num += 1
+        
+        # 온라인 요약 추가
+        online_summary = {
+            "순위": "총합/평균",
+            "상담사": "온라인팀순위",
+            "안마의자": online_df["안마의자"].sum(),
+            "라클라우드": online_df["라클라우드"].sum(),
+            "정수기": online_df["정수기"].sum(),
+            "더케어": online_df["더케어"].sum(),
+            "멤버십": online_df["멤버십"].sum(),
+            "건수": online_df["건수"].sum(),
+            "콜건수": round(online_df["콜건수"].mean(), 1),
+            # 평균 콜타임 초를 계산하고 format_time 함수로 변환
+            "콜타임": format_time(online_df["콜타임_초"].mean())
+        }
+
+        
+        html += '<tr class="summary-row">'
+        html += '<td>총합/평균</td>'
+        html += f'<td>{online_summary["상담사"]}</td>'
+        for col in ['안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수']:
+            value = online_summary[col]
+            value = '-' if value == 0 else value
+            html += f'<td>{value}</td>'
+        html += f'<td>{online_summary["콜건수"]}</td>'
+        html += f'<td>{online_summary["콜타임"]}</td>'
+        html += '</tr>'
+        
+        html += '</tbody></table></div>'
+        return html
+
+    # 시각화를 위한 컴팩트 함수
+    def create_compact_visualization(performance_df):
+        """팀별 비교 시각화를 위한 컴팩트한 차트 생성"""
+        
+        # 팀별 제품 유형 합계 막대 그래프
+        team_summary = performance_df.groupby("조직").agg(
+            안마의자=("안마의자", "sum"),
+            라클라우드=("라클라우드", "sum"),
+            정수기=("정수기", "sum"),
+            더케어=("더케어", "sum"),
+            멤버십=("멤버십", "sum")
+        ).reset_index()
+        
+        # 차트 설정 - 작은 크기와 간소화된 레이아웃
+        fig = px.bar(
+            team_summary,
+            x="조직",
+            y=["안마의자", "라클라우드", "정수기", "더케어", "멤버십"],
+            title="팀별 제품 유형 합계",
+            labels={"value": "건수", "variable": "제품 유형"},
+            height=300,  # 높이 축소
+            color_discrete_sequence=px.colors.qualitative.Pastel
+        )
+        
+        # 레이아웃 간소화
+        fig.update_layout(
+            margin=dict(l=40, r=40, t=40, b=40),  # 마진 축소
+            legend=dict(
+                orientation="h",  # 가로 방향 범례
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1,
+                font=dict(size=8)  # 작은 폰트
+            ),
+            font=dict(size=10)  # 전체 폰트 크기 축소
+        )
+        
+        # 축 레이블 간소화
+        fig.update_xaxes(title_font=dict(size=10))
+        fig.update_yaxes(title_font=dict(size=10))
+        
+        return fig
+
+    # 메인 로직
+    if consultant_file is not None and calltime_file is not None:
+        # 파일 처리 진행 상태 표시
+        with st.spinner('파일 처리 중...'):
+            # 파일 위치 저장을 위해 seek(0)
+            consultant_file.seek(0)
+            calltime_file.seek(0)
+            
+            # 파일 처리 시도
+            consultant_df, consultant_error = process_consultant_file(consultant_file)
+            calltime_df, calltime_error = process_calltime_file(calltime_file)
+        
+        # 오류 체크
+        if consultant_error:
+            st.error(consultant_error)
+        elif calltime_error:
+            st.error(calltime_error)
+        else:
+            # 세션 상태에 데이터프레임 저장
+            st.session_state.consultant_df = consultant_df
+            st.session_state.calltime_df = calltime_df
+            
+            # 분석 실행
+            performance_df, analysis_error = analyze_consultant_performance(consultant_df, calltime_df)
+            
+            if analysis_error:
+                st.error(analysis_error)
+            else:
+                # 세션 상태에 결과 저장
+                st.session_state.performance_df = performance_df
+                
+                # 결과 표시 (압축된 버전)
+                st.markdown('<div class="dark-card"><h3>상담원 실적 현황</h3>', unsafe_allow_html=True)
+                
+                # 날짜 및 시간 표시 추가
+                current_time = datetime.now()
+                # 오전 10시 30분 기준으로 표시 방식 결정
+                cutoff_time = current_time.replace(hour=10, minute=30, second=0, microsecond=0)
+                
+                # 데이터 정보 표시
+                st.write(f"총 {len(performance_df)}명의 상담원 실적이 분석되었습니다.")
+                
+                if current_time < cutoff_time:
+                    # 이전 영업일 구하기 (공휴일 & 주말 제외)
+                    prev_date = get_previous_business_day(current_time)
+                    date_display = f"★전자계약 제외★ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {prev_date.year}년 {prev_date.month}월 {prev_date.day}일 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 전체집계"
+                else:
+                    date_display = f"★전자계약 제외★ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {current_time.year}년 {current_time.month}월 {current_time.day}일 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {current_time.hour}시{current_time.minute}분 기준"
+                
+                st.markdown(f'<h4 style="text-align: center; margin-bottom: 15px; letter-spacing: 1px; word-spacing: 5px;">{date_display}</h4>', unsafe_allow_html=True)
+                
+                # 컴팩트 HTML 테이블 생성 및 표시
+                html_table = generate_compact_html_table(performance_df)
+                st.markdown(html_table, unsafe_allow_html=True)
+                
+                # 중앙 정렬 컨테이너 종료
+                st.markdown("</div>", unsafe_allow_html=True)
+                
+                # 시각화 섹션 - 접을 수 있게 수정
+                with st.expander("시각화 보기", expanded=False):
+                    st.plotly_chart(create_compact_visualization(performance_df), use_container_width=True)
+                
+                # 엑셀 내보내기 부분 유지
+                st.markdown("### 엑셀 파일 다운로드")
+
+                # 다운로드용 데이터프레임 준비 (콜타임_초 컬럼 제거)
+                download_df = performance_df.drop(columns=["콜타임_초"])
+
+                # 엑셀 파일 생성
+                output = BytesIO()
+                writer = pd.ExcelWriter(output, engine='xlsxwriter')
+
+                # 워크북과 워크시트 설정
+                workbook = writer.book
+                
+                # 공통 스타일 정의
+                header_format = workbook.add_format({
+                    'bold': True,
+                    'text_wrap': True,
+                    'valign': 'vcenter',
+                    'align': 'center',
+                    'fg_color': '#305496',
+                    'font_color': 'white',
+                    'border': 1,
+                    'border_color': '#D4D4D4'
+                })
+
+                title_format = workbook.add_format({
+                    'bold': True,
+                    'font_size': 12,
+                    'align': 'center',
+                    'valign': 'vcenter',
+                    'fg_color': '#4472C4',
+                    'font_color': 'white',
+                    'border': 1
+                })
+
+                data_format = workbook.add_format({
+                    'align': 'center',
+                    'valign': 'vcenter',
+                    'border': 1,
+                    'border_color': '#D4D4D4'
+                })
+
+                number_format = workbook.add_format({
+                    'align': 'center',
+                    'valign': 'vcenter',
+                    'border': 1,
+                    'border_color': '#D4D4D4',
+                    'num_format': '#,##0'
+                })
+
+                time_format = workbook.add_format({
+                    'align': 'center',
+                    'valign': 'vcenter',
+                    'border': 1,
+                    'border_color': '#D4D4D4',
+                    'num_format': '[h]:mm:ss'
+                })
+
+                summary_format = workbook.add_format({
+                    'bold': True,
+                    'align': 'center',
+                    'valign': 'vcenter',
+                    'fg_color': '#8EA9DB',
+                    'border': 1,
+                    'border_color': '#D4D4D4',
+                    'font_color': '#363636'
+                })
+
+                alternate_row_format = workbook.add_format({
+                    'align': 'center',
+                    'valign': 'vcenter',
+                    'border': 1,
+                    'border_color': '#D4D4D4',
+                    'fg_color': '#E9EDF4'
+                })
+                
+                # 단일 시트 생성
+                worksheet = writer.sheets['상담원 실적'] = workbook.add_worksheet('상담원 실적')
+                
+                # 현재 날짜 시간 정보 가져오기
+                current_time = datetime.now()
+                cutoff_time = current_time.replace(hour=10, minute=30, second=0, microsecond=0)
+                
+                if current_time < cutoff_time:
+                    # 이전 영업일 구하기 (공휴일 & 주말 제외)
+                    prev_date = get_previous_business_day(current_time)
+                    date_str = f"{prev_date.year}년 {prev_date.month}월 {prev_date.day}일 전체집계"
+                else:
+                    date_str = f"{current_time.year}년 {current_time.month}월 {current_time.day}일 {current_time.hour}시{current_time.minute}분 기준"
+                
+                # 제목 추가 (합병 셀 사용)
+                worksheet.merge_range('A1:J1', f'상담원 실적 현황', title_format)
+                worksheet.merge_range('A2:J2', f'★전자계약 제외★     {date_str}', title_format)
+                worksheet.set_row(0, 25)  # 제목 행 높이 설정
+                
+                # 헤더 행 작성
+                headers = ['순위', '상담사', '안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수', '콜건수', '콜타임']
+                for col_num, header in enumerate(headers):
+                    worksheet.write(2, col_num, header, header_format)
+                
+                # 데이터 정렬 및 준비 (CRM 파트 먼저, 그 다음 온라인 파트)
+                row_num = 3  # 헤더 다음부터 시작
+                
+                # CRM 파트 데이터
+                crm_df = download_df[download_df["조직"] == "CRM파트"].sort_values(by=["건수"], ascending=[False]).copy()
+                crm_df['순위'] = range(1, len(crm_df) + 1)
+                crm_df = crm_df[['순위', '상담사', '안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수', '콜건수', '콜타임']]
+                
+                # CRM 데이터 작성
+                for idx, row_data in enumerate(crm_df.values):
+                    row_format = alternate_row_format if idx % 2 == 1 else data_format
+                    
+                    for col_num, cell_value in enumerate(row_data):
+                        # 0을 '-'로 변환 (안마의자, 라클라우드, 정수기, 더케어, 멤버십)
+                        if col_num in [2, 3, 4, 5, 6] and cell_value == 0:
+                            worksheet.write(row_num, col_num, '-', row_format)
+                        # 숫자 형식 (콜건수)
+                        elif col_num == 8:
+                            worksheet.write(row_num, col_num, cell_value, number_format)
+                        # 시간 형식 (콜타임)
+                        elif col_num == 9:
+                            worksheet.write_string(row_num, col_num, str(cell_value), time_format)
+                        # 일반 데이터
+                        else:
+                            worksheet.write(row_num, col_num, cell_value, row_format)
+                    row_num += 1
+                
+                # CRM 요약행 추가
+                crm_summary = {
+                    "순위": "총합/평균",
+                    "상담사": "CRM팀순위",
+                    "안마의자": crm_df["안마의자"].sum(),
+                    "라클라우드": crm_df["라클라우드"].sum(),
+                    "정수기": crm_df["정수기"].sum(),
+                    "더케어": crm_df["더케어"].sum(),
+                    "멤버십": crm_df["멤버십"].sum(),
+                    "건수": crm_df["건수"].sum(),
+                    "콜건수": round(crm_df["콜건수"].mean(), 1)
+                }
+
+                # CRM 평균 콜타임 계산
+                crm_time_seconds = []
+                for time_str in crm_df["콜타임"]:
+                    parts = time_str.split(":")
+                    if len(parts) == 3:
+                        hours, minutes, seconds = map(int, parts)
+                        total_seconds = hours * 3600 + minutes * 60 + seconds
+                        crm_time_seconds.append(total_seconds)
+
+                avg_crm_seconds = sum(crm_time_seconds) / len(crm_time_seconds) if crm_time_seconds else 0
+                hours = int(avg_crm_seconds // 3600)
+                minutes = int((avg_crm_seconds % 3600) // 60)
+                seconds = int(avg_crm_seconds % 60)
+                crm_avg_time = f"{hours}:{minutes:02d}:{seconds:02d}"
+                
+                worksheet.write(row_num, 0, crm_summary["순위"], summary_format)
+                worksheet.write(row_num, 1, crm_summary["상담사"], summary_format)
+                # 합계 데이터 작성
+                for col_num, key in enumerate(['안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수']):
+                    # 0 값은 '-'로 표시
+                    value = '-' if crm_summary[key] == 0 else crm_summary[key]
+                    worksheet.write(row_num, col_num + 2, value, summary_format)
+                worksheet.write(row_num, 8, crm_summary["콜건수"], summary_format)
+                worksheet.write_string(row_num, 9, crm_avg_time, summary_format)
+                row_num += 1
+                
+                # 온라인 파트 데이터
+                online_df = download_df[download_df["조직"] == "온라인파트"].sort_values(by=["건수"], ascending=[False]).copy()
+                online_df['순위'] = range(1, len(online_df) + 1)
+                online_df = online_df[['순위', '상담사', '안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수', '콜건수', '콜타임']]
+                
+                # 온라인 데이터 작성
+                for idx, row_data in enumerate(online_df.values):
+                    row_format = alternate_row_format if idx % 2 == 1 else data_format
+                    
+                    for col_num, cell_value in enumerate(row_data):
+                        # 0을 '-'로 변환 (안마의자, 라클라우드, 정수기, 더케어, 멤버십)
+                        if col_num in [2, 3, 4, 5, 6] and cell_value == 0:
+                            worksheet.write(row_num, col_num, '-', row_format)
+                        # 숫자 형식 (콜건수)
+                        elif col_num == 8:
+                            worksheet.write(row_num, col_num, cell_value, number_format)
+                        # 시간 형식 (콜타임)
+                        elif col_num == 9:
+                            worksheet.write_string(row_num, col_num, str(cell_value), time_format)
+                        # 일반 데이터
+                        else:
+                            worksheet.write(row_num, col_num, cell_value, row_format)
+                    row_num += 1
+                
+                # 온라인 요약행 추가
+                online_summary = {
+                    "순위": "총합/평균",
+                    "상담사": "온라인팀순위",
+                    "안마의자": online_df["안마의자"].sum(),
+                    "라클라우드": online_df["라클라우드"].sum(),
+                    "정수기": online_df["정수기"].sum(),
+                    "더케어": online_df["더케어"].sum(),
+                    "멤버십": online_df["멤버십"].sum(),
+                    "건수": online_df["건수"].sum(),
+                    "콜건수": round(online_df["콜건수"].mean(), 1)
+                }
+
+                # 온라인 평균 콜타임 계산
+                online_time_seconds = []
+                for time_str in online_df["콜타임"]:
+                    parts = time_str.split(":")
+                    if len(parts) == 3:
+                        hours, minutes, seconds = map(int, parts)
+                        total_seconds = hours * 3600 + minutes * 60 + seconds
+                        online_time_seconds.append(total_seconds)
+
+                avg_online_seconds = sum(online_time_seconds) / len(online_time_seconds) if online_time_seconds else 0
+                hours = int(avg_online_seconds // 3600)
+                minutes = int((avg_online_seconds % 3600) // 60)
+                seconds = int(avg_online_seconds % 60)
+                online_avg_time = f"{hours}:{minutes:02d}:{seconds:02d}"
+
+                
+                worksheet.write(row_num, 0, online_summary["순위"], summary_format)
+                worksheet.write(row_num, 1, online_summary["상담사"], summary_format)
+                # 합계 데이터 작성
+                for col_num, key in enumerate(['안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수']):
+                    # 0 값은 '-'로 표시
+                    value = '-' if online_summary[key] == 0 else online_summary[key]
+                    worksheet.write(row_num, col_num + 2, value, summary_format)
+                worksheet.write(row_num, 8, online_summary["콜건수"], summary_format)
+                worksheet.write_string(row_num, 9, online_avg_time, summary_format)
+                
+                # 컬럼 너비 조정
+                column_widths = {0: 6, 1: 15, 2: 8, 3: 10, 4: 8, 5: 8, 6: 8, 7: 6, 8: 8, 9: 10}
+                for col_num, width in column_widths.items():
+                    worksheet.set_column(col_num, col_num, width)
+                
+                # 엑셀 파일 저장
+                writer.close()
+                excel_data = output.getvalue()
+                
+                # 다운로드 버튼 스타일 - 더 컴팩트하게
+                st.markdown("""
+                <style>
+                .download-button {
+                    display: inline-block;
+                    padding: 8px 16px;
+                    background-color: #4472C4;
+                    color: white;
+                    text-align: center;
+                    border-radius: 4px;
+                    font-weight: bold;
+                    text-decoration: none;
+                    margin-top: 8px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+                    transition: all 0.2s ease;
+                    font-size: 0.9em;
+                }
+                .download-button:hover {
+                    background-color: #305496;
+                    box-shadow: 0 3px 6px rgba(0,0,0,0.3);
+                }
+                </style>
+                """, unsafe_allow_html=True)
+
+                # 다운로드 링크 생성
+                b64 = base64.b64encode(excel_data).decode()
+                href = f'<div style="text-align: center;"><a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="상담원_실적_현황.xlsx" class="download-button">엑셀 파일 다운로드</a></div>'
+                st.markdown(href, unsafe_allow_html=True)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        # 파일 업로드 전 안내 화면
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.info("상담주문계약내역과 콜타임 파일을 모두 업로드하면 분석이 시작됩니다.")
+        
+        # 샘플 데이터 표시
+        st.markdown("### 표시 형식 샘플")
+        
+        # 현재 날짜 및 시간 표시 추가 (샘플에도 적용)
+        current_time = datetime.now()
+        # 오전 10시 30분 기준으로 표시 방식 결정
+        cutoff_time = current_time.replace(hour=10, minute=30, second=0, microsecond=0)
+        
+        if current_time < cutoff_time:
+            # 이전 영업일 구하기 (공휴일 & 주말 제외)
+            prev_date = get_previous_business_day(current_time)
+            date_display = f"★전자계약 제외★ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {prev_date.year}년 {prev_date.month}월 {prev_date.day}일 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 전체집계"
+        else:
+            date_display = f"★전자계약 제외★ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {current_time.year}년 {current_time.month}월 {current_time.day}일 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {current_time.hour}시{current_time.minute}분 기준"
+        
+        st.markdown(f'<h4 style="text-align: center; margin-bottom: 15px; letter-spacing: 1px; word-spacing: 5px;">{date_display}</h4>', unsafe_allow_html=True)
+        
+        # 컴팩트 샘플 테이블 생성 함수
+        def generate_compact_sample_html_table():
+            html = '''
+            <style>
+            .table-container {
+                width: 50%;  /* 데스크톱에서는 50% 너비로 제한 */
+                margin: 0 auto;  /* 중앙 정렬 */
+                overflow-x: auto;  /* 모바일에서 가로 스크롤 가능하게 */
+            }
+            
+            /* 모바일 환경에서는 컨테이너를 100% 너비로 확장 */
+            @media (max-width: 768px) {
+                .table-container {
+                    width: 100%;
+                }
+            }
+            
+            /* Streamlit의 테마 변수를 활용한 동적 스타일링 */
+            .compact-table {
+                border-collapse: collapse;
+                font-size: 0.7em;
+                width: 100%;
+                table-layout: fixed;
+                margin: 0 auto;
+            }
+            
+            /* 다크모드/라이트모드 감지 */
+            @media (prefers-color-scheme: dark) {
+                .compact-table thead tr {
+                    background-color: #262730;
+                    color: white;
+                }
+                .compact-table tbody tr {
+                    background-color: #1E1E1E;
+                    color: white;
+                }
+                .compact-table tbody tr:nth-of-type(even) {
+                    background-color: #2D2D2D;
+                }
+                .compact-table tbody tr.summary-row {
+                    background-color: #2E4053;
+                    color: white;
+                }
+                .compact-table th, .compact-table td {
+                    border: 1px solid #444;
+                }
+            }
+            
+            @media (prefers-color-scheme: light) {
+                .compact-table thead tr {
+                    background-color: #f1f1f1;
+                    color: #333;
+                }
+                .compact-table tbody tr {
+                    background-color: #ffffff;
+                    color: #333;
+                }
+                .compact-table tbody tr:nth-of-type(even) {
+                    background-color: #f9f9f9;
+                }
+                .compact-table tbody tr.summary-row {
+                    background-color: #e6f0ff;
+                    color: #333;
+                }
+                .compact-table th, .compact-table td {
+                    border: 1px solid #ddd;
+                }
+            }
+            .compact-table th, .compact-table td {
+                padding: 2px 3px;
+                text-align: center;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            
+            .compact-table thead tr {
+                text-align: center;
+                font-weight: bold;
+            }
+            
+            .compact-table tbody tr.summary-row {
+                font-weight: bold;
+            }
+            /* 컬럼 너비 최적화 */
+            .compact-table th:nth-child(1), .compact-table td:nth-child(1) { width: 3%; }
+            .compact-table th:nth-child(2), .compact-table td:nth-child(2) { width: 7%; }
+            .compact-table th:nth-child(3), .compact-table td:nth-child(3),
+            .compact-table th:nth-child(4), .compact-table td:nth-child(4),
+            .compact-table th:nth-child(5), .compact-table td:nth-child(5),
+            .compact-table th:nth-child(6), .compact-table td:nth-child(6),
+            .compact-table th:nth-child(7), .compact-table td:nth-child(7) { width: 4%; }
+            .compact-table th:nth-child(8), .compact-table td:nth-child(8) { width: 3%; }
+            .compact-table th:nth-child(9), .compact-table td:nth-child(9) { width: 5%; }
+            .compact-table th:nth-child(10), .compact-table td:nth-child(10) { width: 6%; }
+            
+            /* 간소화된 헤더 */
+            .compact-table th:nth-child(3)::after { content: "안"; }
+            .compact-table th:nth-child(3) span { display: none; }
+            .compact-table th:nth-child(4)::after { content: "라"; }
+            .compact-table th:nth-child(4) span { display: none; }
+            .compact-table th:nth-child(5)::after { content: "정"; }
+            .compact-table th:nth-child(5) span { display: none; }
+            .compact-table th:nth-child(6)::after { content: "케어"; }
+            .compact-table th:nth-child(6) span { display: none; }
+            .compact-table th:nth-child(7)::after { content: "멤버"; }
+            .compact-table th:nth-child(7) span { display: none; }
+            </style>
+            <div class="table-container">
+            <table class="compact-table">
+            '''
+            
+            # 헤더 추가
+            headers = ['순위', '상담사', '<span>안마의자</span>', '<span>라클라우드</span>', '<span>정수기</span>', '<span>더케어</span>', '<span>멤버십</span>', '건수', '콜건수', '콜타임']
+            html += '<thead><tr>'
+            for header in headers:
+                html += f'<th>{header}</th>'
+            html += '</tr></thead>'
+            
+            # CRM 파트 샘플 데이터
+            html += '<tbody>'
+            crm_data = [
+                [1, '이승현', '-', '-', 3, 2, '-', 5, 53, '2:29:48'],
+                [2, '유태경', '-', '-', 3, 1, '-', 4, 81, '1:41:45'],
+                [3, '임명숙', '-', '-', 2, 1, '-', 3, 216, '2:32:51'],
+                [4, '김미정', '-', '-', 2, 1, '-', 3, 247, '2:19:56'],
+                [5, '장희경', '-', 1, 1, '-', 1, 3, 131, '1:58:41'],
+                ['총합/평균', 'CRM팀순위', 1, 1, 22, 8, 2, 34, 132, '2:15:02']
+            ]
+            
+            for row in crm_data:
+                row_class = 'summary-row' if row[0] == '총합/평균' else ''
+                html += f'<tr class="{row_class}">'
+                for cell in row:
+                    html += f'<td>{cell}</td>'
+                html += '</tr>'
+            
+            # 온라인 파트 샘플 데이터
+            online_data = [
+                [1, '김부자', 2, '-', '-', 1, '-', 3, 60, '2:37:15'],
+                [2, '최진영', 1, '-', '-', 1, '-', 2, 59, '1:44:40'],
+                ['총합/평균', '온라인팀순위', 3, '-', '-', 2, '-', 5, 59, '1:44:40']
+            ]
+            
+            for row in online_data:
+                row_class = 'summary-row' if row[0] == '총합/평균' else ''
+                html += f'<tr class="{row_class}">'
+                for cell in row:
+                    html += f'<td>{cell}</td>'
+                html += '</tr>'
+                
+            html += '</tbody></table></div>'
+            return html
+        
+        # 컴팩트 샘플 테이블 표시
+        html_table = generate_compact_sample_html_table()
+        st.markdown(html_table, unsafe_allow_html=True)
+        
+        # 간소화된 사용 가이드
+        st.markdown("""
+        ### 사용 가이드
+        1. 상담주문계약내역 및 콜타임 엑셀 파일을 업로드하세요.
+        2. 파일이 업로드되면 자동으로 분석이 진행됩니다.
+        3. 조직별로 상담원 실적을 확인하고 엑셀로 다운로드할 수 있습니다.
+        """)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # 페이지 하단 정보
+    st.markdown("""
+    <div style="text-align: center; margin-top: 20px; padding: 5px; color: #666; font-size: 0.8em;">
+        © 2025 상담원 실적 현황 분석 도구 Made in BM | 버전 1.0.0
+    </div>
+    """, unsafe_allow_html=True)

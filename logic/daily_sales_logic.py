@@ -94,7 +94,7 @@ def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
         
         # 매출금액 계산 공식
         df['매출금액'] = (df['월 렌탈 금액'] * (df['약정 기간 값'] - df['총 패키지 할인 회차']) + 
-                      df['판매 금액'] + df['선납 렌탈 금액'])
+                      df['판매 금액'] - df['일시불 판매 추가 할인 금액'] + df['선납 렌탈 금액'])
         
         # VAT 제외 매출금액 계산
         df['매출금액(VAT제외)'] = df['매출금액'] / (1 + vat_rate)
@@ -212,7 +212,7 @@ def process_installation_file(file) -> Tuple[Optional[pd.DataFrame], Optional[st
         
         # 매출금액 계산 공식
         df['매출금액'] = (df['월 렌탈 금액'] * (df['약정 기간 값'] - df['총 패키지 할인 회차']) + 
-                      df['판매 금액'] + df['선납 렌탈 금액'])
+                      df['판매 금액'] - df['일시불 판매 추가 할인 금액'] + df['선납 렌탈 금액'])
         
         # VAT 제외 매출금액 계산
         df['매출금액(VAT제외)'] = df['매출금액'] / (1 + vat_rate)
@@ -593,35 +593,20 @@ def create_excel_report(
                 
                 # 백만 단위로 변환하여 소수점 없이 반올림
                 total_amount = row['총승인(본사/연계)_매출액']
-                if total_amount >= 1000000:
-                    worksheet1.write(current_row, 2, round(total_amount/1000000), number_format)
-                else:
-                    worksheet1.write(current_row, 2, total_amount, number_format)
+                worksheet1.write(current_row, 2, row['총승인(본사/연계)_매출액'], number_format)
                 
                 worksheet1.write(current_row, 3, row['본사직접승인_건수'], number_format)
                 
-                hq_amount = row['본사직접승인_매출액']
-                if hq_amount >= 1000000:
-                    worksheet1.write(current_row, 4, round(hq_amount/1000000), number_format)
-                else:
-                    worksheet1.write(current_row, 4, hq_amount, number_format)
+                worksheet1.write(current_row, 4, row['본사직접승인_매출액'], number_format)
                 
                 worksheet1.write(current_row, 5, row['연계승인_건수'], number_format)
                 
-                link_amount = row['연계승인_매출액']
-                if link_amount >= 1000000:
-                    worksheet1.write(current_row, 6, round(link_amount/1000000), number_format)
-                else:
-                    worksheet1.write(current_row, 6, link_amount, number_format)
+                worksheet1.write(current_row, 6, row['연계승인_매출액'], number_format)
                 
                 worksheet1.write(current_row, 7, row['온라인_건수'], number_format)
                 
-                online_amount = row['온라인_매출액']
-                if online_amount >= 1000000:
-                    worksheet1.write(current_row, 8, round(online_amount/1000000), number_format)
-                else:
-                    worksheet1.write(current_row, 8, online_amount, number_format)
-                
+                worksheet1.write(current_row, 8, row['온라인_매출액'], number_format)
+
                 current_row += 1
         else:
             # 데이터가 없는 경우 안내 메시지
@@ -664,35 +649,19 @@ def create_excel_report(
             worksheet1.write(current_row, 1, row['총승인(본사/연계)_건수'], number_format)
             
             # 백만 단위로 변환하여 소수점 없이 반올림
-            total_amount = row['총승인(본사/연계)_매출액']
-            if total_amount >= 1000000:
-                worksheet1.write(current_row, 2, round(total_amount/1000000), number_format)
-            else:
-                worksheet1.write(current_row, 2, total_amount, number_format)
+            worksheet1.write(current_row, 2, row['총승인(본사/연계)_매출액'], number_format)
             
             worksheet1.write(current_row, 3, row['본사직접승인_건수'], number_format)
             
-            hq_amount = row['본사직접승인_매출액']
-            if hq_amount >= 1000000:
-                worksheet1.write(current_row, 4, round(hq_amount/1000000), number_format)
-            else:
-                worksheet1.write(current_row, 4, hq_amount, number_format)
+            worksheet1.write(current_row, 4, row['본사직접승인_매출액'], number_format)
             
             worksheet1.write(current_row, 5, row['연계승인_건수'], number_format)
             
-            link_amount = row['연계승인_매출액']
-            if link_amount >= 1000000:
-                worksheet1.write(current_row, 6, round(link_amount/1000000), number_format)
-            else:
-                worksheet1.write(current_row, 6, link_amount, number_format)
+            worksheet1.write(current_row, 6, row['연계승인_매출액'], number_format)
             
             worksheet1.write(current_row, 7, row['온라인_건수'], number_format)
             
-            online_amount = row['온라인_매출액']
-            if online_amount >= 1000000:
-                worksheet1.write(current_row, 8, round(online_amount/1000000), number_format)
-            else:
-                worksheet1.write(current_row, 8, online_amount, number_format)
+            worksheet1.write(current_row, 8, row['온라인_매출액'], number_format)
             
             current_row += 1
         
@@ -733,35 +702,19 @@ def create_excel_report(
                 worksheet1.write(current_row, 1, row['총승인(본사/연계)_건수'], number_format)
                 
                 # 백만 단위로 변환하여 소수점 없이 반올림
-                total_amount = row['총승인(본사/연계)_매출액']
-                if total_amount >= 1000000:
-                    worksheet1.write(current_row, 2, round(total_amount/1000000), number_format)
-                else:
-                    worksheet1.write(current_row, 2, total_amount, number_format)
+                worksheet1.write(current_row, 2, row['총승인(본사/연계)_매출액'], number_format)
                 
                 worksheet1.write(current_row, 3, row['본사직접승인_건수'], number_format)
                 
-                hq_amount = row['본사직접승인_매출액']
-                if hq_amount >= 1000000:
-                    worksheet1.write(current_row, 4, round(hq_amount/1000000), number_format)
-                else:
-                    worksheet1.write(current_row, 4, hq_amount, number_format)
+                worksheet1.write(current_row, 4, row['본사직접승인_매출액'], number_format)
                 
                 worksheet1.write(current_row, 5, row['연계승인_건수'], number_format)
                 
-                link_amount = row['연계승인_매출액']
-                if link_amount >= 1000000:
-                    worksheet1.write(current_row, 6, round(link_amount/1000000), number_format)
-                else:
-                    worksheet1.write(current_row, 6, link_amount, number_format)
+                worksheet1.write(current_row, 6, row['연계승인_매출액'], number_format)
                 
                 worksheet1.write(current_row, 7, row['온라인_건수'], number_format)
                 
-                online_amount = row['온라인_매출액']
-                if online_amount >= 1000000:
-                    worksheet1.write(current_row, 8, round(online_amount/1000000), number_format)
-                else:
-                    worksheet1.write(current_row, 8, online_amount, number_format)
+                worksheet1.write(current_row, 8, row['온라인_매출액'], number_format)
                 
                 current_row += 1
         

@@ -136,8 +136,7 @@ def generate_compact_html_table(df: pd.DataFrame, is_previous_day: bool = False)
     else:
         # 당일 데이터를 조회하는 경우 - 현재 시간 기준으로 목표 계산
         current_target_seconds = calculate_target_calltime_seconds(current_time.time())
-    
-    # 테이블 컨테이너 시작
+       # 테이블 컨테이너 시작
     html += '<div class="table-container">'
     html += '<table class="compact-table">'
     

@@ -5926,3 +5926,223 @@ Workbook contains no default style, apply openpyxl's default
 
 Workbook contains no default style, apply openpyxl's default
 
+2025-03-28 23:09:40.041 Uncaught app execution
+Traceback (most recent call last):
+  File "/home/haruhome/miniconda3/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 121, in exec_func_with_error_handling
+    result = func()
+             ^^^^^^
+  File "/home/haruhome/miniconda3/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 593, in code_to_exec
+    exec(code, module.__dict__)
+  File "/home/haruhome/share/python/excel-analyzer-app-complete.py", line 15, in <module>
+    from ui import daily_sales_ui  # 새로운 일일 매출 현황 UI 모듈 추가
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/haruhome/share/python/ui/daily_sales_ui.py", line 22, in <module>
+    from excel_password_handler import handle_excel_with_password, is_excel_encrypted
+ModuleNotFoundError: No module named 'excel_password_handler'
+2025-03-28 23:16:30.053 Uncaught app execution
+Traceback (most recent call last):
+  File "/home/haruhome/miniconda3/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 121, in exec_func_with_error_handling
+    result = func()
+             ^^^^^^
+  File "/home/haruhome/miniconda3/lib/python3.12/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 593, in code_to_exec
+    exec(code, module.__dict__)
+  File "/home/haruhome/share/python/excel-analyzer-app-complete.py", line 15, in <module>
+    from ui import daily_sales_ui  # 새로운 일일 매출 현황 UI 모듈 추가
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/haruhome/share/python/ui/daily_sales_ui.py", line 16, in <module>
+    from logic.daily_sales_logic import (
+  File "/home/haruhome/share/python/logic/daily_sales_logic.py", line 20, in <module>
+    from excel_password_handler import handle_excel_with_password
+ModuleNotFoundError: No module named 'excel_password_handler'
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+
+/home/haruhome/miniconda3/lib/python3.12/site-packages/openpyxl/styles/stylesheet.py:237: UserWarning:
+
+Workbook contains no default style, apply openpyxl's default
+

@@ -37,7 +37,7 @@ def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
         required_columns = [
             "주문 일자", "판매인입경로", "일반회차 캠페인", "대분류", 
             "월 렌탈 금액", "약정 기간 값", "총 패키지 할인 회차", 
-            "판매 금액", "선납 렌탈 금액"
+            "판매 금액", "선납 렌탈 금액", "매출액"
         ]
         
         # 컬럼명이 비슷한 경우 매핑
@@ -55,8 +55,9 @@ def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
                 "월 렌탈 금액": ["월렌탈금액", "렌탈 금액", "렌탈금액", "월 렌탈료"],
                 "약정 기간 값": ["약정기간값", "약정 기간", "약정개월", "약정 개월"],
                 "총 패키지 할인 회차": ["총패키지할인회차", "패키지 할인", "할인 회차", "패키지할인회차"],
-                "판매 금액": ["판매금액", "매출 금액", "매출금액"],
-                "선납 렌탈 금액": ["선납렌탈금액", "선납금액", "선납 금액"]
+                "판매 금액": ["판매금액", "매출 금액"],
+                "선납 렌탈 금액": ["선납렌탈금액", "선납금액", "선납 금액"],
+                "매출액": ["순매출액", "매출금액", "매출", "net_sales", "net_revenue"]
             }
             
             if req_col in similar_cols:
@@ -71,13 +72,10 @@ def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
         if column_mapping:
             df = df.rename(columns=column_mapping)
         
-        # 필요한 컬럼 확인 재검사
-        missing_columns = [col for col in required_columns if col not in df.columns]
+        # 필요한 컬럼 확인 재검사 (매출액 컬럼 없으면 VAT 계산 필요)
+        missing_columns = [col for col in required_columns[:-1] if col not in df.columns]  # 매출액은 필수가 아니어도 됨
         if missing_columns:
             return None, f"승인매출 파일에 필요한 열이 없습니다: {', '.join(missing_columns)}"
-        
-        # VAT 세율 설정 - 1.1%
-        vat_rate = 0.011
         
         # 숫자형 변환 (대분류, 판매인입경로, 일반회차 캠페인 제외)
         numeric_columns = [
@@ -85,19 +83,39 @@ def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
             "판매 금액", "선납 렌탈 금액"
         ]
         
+        if "매출액" in df.columns:
+            numeric_columns.append("매출액")
+        
         for col in numeric_columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
         # 총 패키지 할인 회차 데이터 정제
         # 39, 59, 60 값은 0으로 대체 (특정 비즈니스 규칙)
-        df['총 패키지 할인 회차'] = df['총 패키지 할인 회차'].replace([39, 59, 60], 0)
+        if "총 패키지 할인 회차" in df.columns:
+            df['총 패키지 할인 회차'] = df['총 패키지 할인 회차'].replace([39, 59, 60], 0)
         
-        # 매출금액 계산 공식
-        df['매출금액'] = (df['월 렌탈 금액'] * (df['약정 기간 값'] - df['총 패키지 할인 회차']) + 
-                      df['판매 금액'] - df['일시불 판매 추가 할인 금액'] + df['선납 렌탈 금액'])
+        # 매출금액 계산 공식 (ERP에서 제공한 매출액 컬럼이 없는 경우에만 계산)
+        if "매출액" not in df.columns:
+            # 일시불 판매 추가 할인 금액 컬럼이 있는지 확인
+            has_discount_column = "일시불 판매 추가 할인 금액" in df.columns
+            
+            # 매출금액 계산
+            if has_discount_column:
+                df['매출금액'] = (df['월 렌탈 금액'] * (df['약정 기간 값'] - df['총 패키지 할인 회차']) + 
+                              df['판매 금액'] - df['일시불 판매 추가 할인 금액'] + df['선납 렌탈 금액'])
+            else:
+                df['매출금액'] = (df['월 렌탈 금액'] * (df['약정 기간 값'] - df['총 패키지 할인 회차']) + 
+                              df['판매 금액'] + df['선납 렌탈 금액'])
+            
+            # VAT 세율 설정 - 10%
+            vat_rate = 0.1
+            
+            # VAT 제외 매출금액 계산
+            df['매출액'] = round(df['매출금액'] / (1 + vat_rate), 0)
         
-        # VAT 제외 매출금액 계산
-        df['매출금액(VAT제외)'] = df['매출금액'] / (1 + vat_rate)
+        # 매출금액(VAT제외) 컬럼도 호환성을 위해 유지 (매출액 값으로 복사)
+        df['매출금액(VAT제외)'] = df['매출액']
         
         return df, None
         
@@ -169,8 +187,9 @@ def process_installation_file(file) -> Tuple[Optional[pd.DataFrame], Optional[st
                 "월 렌탈 금액": ["월렌탈금액", "렌탈 금액", "렌탈금액", "월 렌탈료"],
                 "약정 기간 값": ["약정기간값", "약정 기간", "약정개월", "약정 개월"],
                 "총 패키지 할인 회차": ["총패키지할인회차", "패키지 할인", "할인 회차", "패키지할인회차"],
-                "판매 금액": ["판매금액", "매출 금액", "매출금액"],
-                "선납 렌탈 금액": ["선납렌탈금액", "선납금액", "선납 금액"]
+                "판매 금액": ["판매금액", "매출 금액"],
+                "선납 렌탈 금액": ["선납렌탈금액", "선납금액", "선납 금액"],
+                "매출액": ["순매출액", "매출금액", "매출", "net_sales", "net_revenue"]
             }
             
             if req_col in similar_cols:
@@ -194,28 +213,45 @@ def process_installation_file(file) -> Tuple[Optional[pd.DataFrame], Optional[st
         if date_column and date_column != "주문 일자":
             df["주문 일자"] = df[date_column]
         
-        # VAT 세율 설정 - 1.1%
-        vat_rate = 0.011
-        
         # 숫자형 변환 (대분류, 판매인입경로, 일반회차 캠페인 제외)
         numeric_columns = [
             "월 렌탈 금액", "약정 기간 값", "총 패키지 할인 회차", 
             "판매 금액", "선납 렌탈 금액"
         ]
         
+        if "매출액" in df.columns:
+            numeric_columns.append("매출액")
+        
         for col in numeric_columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
         # 총 패키지 할인 회차 데이터 정제
         # 39, 59, 60 값은 0으로 대체 (특정 비즈니스 규칙)
-        df['총 패키지 할인 회차'] = df['총 패키지 할인 회차'].replace([39, 59, 60], 0)
+        if "총 패키지 할인 회차" in df.columns:
+            df['총 패키지 할인 회차'] = df['총 패키지 할인 회차'].replace([39, 59, 60], 0)
         
-        # 매출금액 계산 공식
-        df['매출금액'] = (df['월 렌탈 금액'] * (df['약정 기간 값'] - df['총 패키지 할인 회차']) + 
-                      df['판매 금액'] - df['일시불 판매 추가 할인 금액'] + df['선납 렌탈 금액'])
+        # 매출금액 계산 공식 (ERP에서 제공한 매출액 컬럼이 없는 경우에만 계산)
+        if "매출액" not in df.columns:
+            # 일시불 판매 추가 할인 금액 컬럼이 있는지 확인
+            has_discount_column = "일시불 판매 추가 할인 금액" in df.columns
+            
+            # 매출금액 계산
+            if has_discount_column:
+                df['매출금액'] = (df['월 렌탈 금액'] * (df['약정 기간 값'] - df['총 패키지 할인 회차']) + 
+                              df['판매 금액'] - df['일시불 판매 추가 할인 금액'] + df['선납 렌탈 금액'])
+            else:
+                df['매출금액'] = (df['월 렌탈 금액'] * (df['약정 기간 값'] - df['총 패키지 할인 회차']) + 
+                              df['판매 금액'] + df['선납 렌탈 금액'])
+            
+            # VAT 세율 설정 - 10%
+            vat_rate = 0.1
+            
+            # VAT 제외 매출금액 계산
+            df['매출액'] = round(df['매출금액'] / (1 + vat_rate), 0)
         
-        # VAT 제외 매출금액 계산
-        df['매출금액(VAT제외)'] = df['매출금액'] / (1 + vat_rate)
+        # 매출금액(VAT제외) 컬럼도 호환성을 위해 유지 (매출액 값으로 복사)
+        df['매출금액(VAT제외)'] = df['매출액']
         
         return df, None
         
@@ -361,6 +397,9 @@ def analyze_approval_data_by_product(df: pd.DataFrame) -> pd.DataFrame:
     # 제품 종류 정의
     products = ["안마의자", "라클라우드", "정수기"]
     
+    # 매출 컬럼 결정 (매출액이 있으면 그것을 사용, 없으면 매출금액(VAT제외) 사용)
+    revenue_column = "매출액" if "매출액" in df.columns else "매출금액(VAT제외)"
+    
     # 필터링 조건 정의
     # 1. 본사/연계합계: "CB-"로 시작하는 캠페인 제외, "V-", "C-"로 시작하거나 "캠", "정규", "분배"를 포함하는 캠페인
     total_mask = df['일반회차 캠페인'].astype(str).str.match(r'^(?!CB-).*$')
@@ -398,22 +437,22 @@ def analyze_approval_data_by_product(df: pd.DataFrame) -> pd.DataFrame:
         # 1. 총승인(본사/연계)
         hq_link_product = hq_link_df[hq_link_df['대분류'].astype(str).str.contains(product)]
         product_row["총승인(본사/연계)_건수"] = len(hq_link_product)
-        product_row["총승인(본사/연계)_매출액"] = hq_link_product['매출금액(VAT제외)'].sum()
+        product_row["총승인(본사/연계)_매출액"] = hq_link_product[revenue_column].sum()
         
         # 2. 본사직접승인
         hq_product = hq_df[hq_df['대분류'].astype(str).str.contains(product)]
         product_row["본사직접승인_건수"] = len(hq_product)
-        product_row["본사직접승인_매출액"] = hq_product['매출금액(VAT제외)'].sum()
+        product_row["본사직접승인_매출액"] = hq_product[revenue_column].sum()
         
         # 3. 연계승인
         link_product = link_df[link_df['대분류'].astype(str).str.contains(product)]
         product_row["연계승인_건수"] = len(link_product)
-        product_row["연계승인_매출액"] = link_product['매출금액(VAT제외)'].sum()
+        product_row["연계승인_매출액"] = link_product[revenue_column].sum()
         
         # 4. 온라인
         online_product = online_df[online_df['대분류'].astype(str).str.contains(product)]
         product_row["온라인_건수"] = len(online_product)
-        product_row["온라인_매출액"] = online_product['매출금액(VAT제외)'].sum()
+        product_row["온라인_매출액"] = online_product[revenue_column].sum()
         
         result_data.append(product_row)
     
@@ -725,14 +764,11 @@ def create_excel_report(
             # 원본 데이터에서 필요한 컬럼만 추출
             approval_data = original_approval_df.copy()
             
-            # 원본 매출금액 대신 VAT제외 매출액을 사용
-            if '매출금액' in approval_data.columns and '매출금액(VAT제외)' in approval_data.columns:
-                # 매출금액(VAT제외) 컬럼을 매출금액 컬럼으로 복사
-                approval_data['매출금액'] = approval_data['매출금액(VAT제외)']
+            # 매출액 컬럼이 없는 경우 호환성을 위해 매출금액(VAT제외)로부터 생성
+            if '매출액' not in approval_data.columns and '매출금액(VAT제외)' in approval_data.columns:
+                approval_data['매출액'] = approval_data['매출금액(VAT제외)']
             
-            # 매출금액(VAT제외) 컬럼 제거
-            if '매출금액(VAT제외)' in approval_data.columns:
-                approval_data.drop('매출금액(VAT제외)', axis=1, inplace=True)
+            # 매출금액(VAT제외) 컬럼은 그대로 유지
             
             # 비어있는 열 확인하여 제거
             empty_cols = []
@@ -785,15 +821,42 @@ def create_excel_report(
                         worksheet2.write(row_idx, col_idx, value, data_format)
                         continue
                     
-                    # 모바일 번호 처리 (텍스트 형식으로)
+                    # 모바일 번호 및 일반 전화번호 처리 (텍스트 형식으로)
                     if col_name in mobile_columns:
                         # 숫자 값을 문자열로 변환
                         if isinstance(value, (int, float)):
-                            mobile_str = str(int(value))  # 소수점 제거
-                            # 10자리 숫자면 앞에 0 추가 (한국 휴대폰 번호 보정)
-                            if len(mobile_str) == 10 and mobile_str.startswith('10'):
-                                mobile_str = '0' + mobile_str
-                            worksheet2.write(row_idx, col_idx, mobile_str, mobile_format)
+                            phone_str = str(int(value))  # 소수점 제거
+                            
+                            # 한국 전화번호 보정
+                            if len(phone_str) == 10 and phone_str.startswith('10'):  # 휴대폰 번호 (예: 1012345678)
+                                # 휴대폰 번호면 앞에 0 추가
+                                formatted_str = '0' + phone_str
+                            elif len(phone_str) == 9:
+                                if phone_str.startswith('2'):  # 서울 지역번호 (예: 212345678)
+                                    # 서울 지역번호(02)인 경우 앞에 0 추가
+                                    formatted_str = '0' + phone_str
+                                elif phone_str.startswith('3') or phone_str.startswith('4') or phone_str.startswith('5') or phone_str.startswith('6'):
+                                    # 기타 지역번호(031, 032, 033, 041 등)도 앞에 0 추가
+                                    # 334392221 -> 0334392221 (033 지역번호)
+                                    formatted_str = '0' + phone_str
+                                else:
+                                    # 그 외는 그대로 유지
+                                    formatted_str = phone_str
+                            elif len(phone_str) == 10 and (phone_str.startswith('31') or phone_str.startswith('32') or 
+                                                        phone_str.startswith('33') or phone_str.startswith('41') or 
+                                                        phone_str.startswith('42') or phone_str.startswith('43') or 
+                                                        phone_str.startswith('51') or phone_str.startswith('52') or 
+                                                        phone_str.startswith('53') or phone_str.startswith('54') or 
+                                                        phone_str.startswith('55') or phone_str.startswith('61') or 
+                                                        phone_str.startswith('62') or phone_str.startswith('63') or 
+                                                        phone_str.startswith('64')):
+                                # 지역번호인 경우 앞에 0 추가
+                                formatted_str = '0' + phone_str
+                            else:
+                                # 서비스 번호(예: 15883082) 또는 기타 번호는 그대로 유지
+                                formatted_str = phone_str
+                                
+                            worksheet2.write(row_idx, col_idx, formatted_str, mobile_format)
                         else:
                             # 문자열이면 그대로 사용
                             worksheet2.write(row_idx, col_idx, str(value), mobile_format)
@@ -838,14 +901,11 @@ def create_excel_report(
             # 원본 데이터에서 필요한 컬럼만 추출
             installation_data = original_installation_df.copy()
             
-            # 원본 매출금액 대신 VAT제외 매출액을 사용
-            if '매출금액' in installation_data.columns and '매출금액(VAT제외)' in installation_data.columns:
-                # 매출금액(VAT제외) 컬럼을 매출금액 컬럼으로 복사
-                installation_data['매출금액'] = installation_data['매출금액(VAT제외)']
+            # 매출액 컬럼이 없는 경우 호환성을 위해 매출금액(VAT제외)로부터 생성
+            if '매출액' not in installation_data.columns and '매출금액(VAT제외)' in installation_data.columns:
+                installation_data['매출액'] = installation_data['매출금액(VAT제외)']
             
-            # 매출금액(VAT제외) 컬럼 제거
-            if '매출금액(VAT제외)' in installation_data.columns:
-                installation_data.drop('매출금액(VAT제외)', axis=1, inplace=True)
+            # 매출금액(VAT제외) 컬럼은 그대로 유지
             
             # 비어있는 열 확인하여 제거
             empty_cols = []

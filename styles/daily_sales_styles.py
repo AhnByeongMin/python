@@ -268,6 +268,229 @@ DARK_TABLE_STYLE = """
 </style>
 """
 
+# 버튼 스타일 - 매우 선명하고 확실하게 활성화된 스타일
+IMPROVED_BUTTON_STYLE = """
+<style>
+    /* 버튼 컨테이너 스타일 - 중앙 정렬 */
+    .custom-button-container {
+        display: flex;
+        justify-content: center;
+        margin: 24px 0;
+        position: relative;
+    }
+    
+    /* 스트림릿 기본 버튼 스타일 재정의 - 페이스북 파란색 */
+    .stButton > button {
+        background-color: #1877F2 !important;  /* 페이스북 파란색 */
+        color: #FFFFFF !important;  /* 완전한 흰색 */
+        font-family: 'Roboto', sans-serif;
+        font-size: 16px !important;
+        font-weight: 700 !important;  /* 매우 굵게 */
+        padding: 12px 32px !important;
+        border-radius: 4px !important;
+        border: none !important;
+        box-shadow: 0 4px 8px rgba(24, 119, 242, 0.3) !important;
+        transition: all 0.3s ease !important;
+        position: relative;
+        overflow: hidden;
+        min-width: 180px;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+    }
+    
+    /* 호버 상태 - 더 밝게 */
+    .stButton > button:hover {
+        background-color: #0D6EFD !important;  /* 더 밝은 파란색 */
+        box-shadow: 0 6px 12px rgba(24, 119, 242, 0.4) !important;
+        transform: translateY(-2px);
+    }
+    
+    /* 클릭(액티브) 상태 */
+    .stButton > button:active {
+        background-color: #0B5ED7 !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2) !important;
+        transform: translateY(1px);
+    }
+    
+    /* 비활성화 상태 - 확실히 구분되게 */
+    .stButton > button:disabled {
+        background-color: #E0E0E0 !important;  /* 매우 밝은 회색 */
+        color: #9E9E9E !important;  /* 중간 회색 */
+        cursor: not-allowed !important;
+        box-shadow: none !important;
+        transform: none !important;
+        opacity: 1 !important;  /* 투명도 없음 */
+    }
+    
+    /* 진행 메시지 스타일 */
+    .progress-message {
+        text-align: center;
+        margin: 10px 0;
+        font-weight: 600;
+        color: #1877F2;  /* 버튼 색상과 일치 */
+        font-size: 15px;
+        animation: pulse 1.5s infinite;
+    }
+    
+    /* 경과 시간 표시 */
+    .elapsed-time {
+        text-align: center;
+        color: #424242;
+        font-size: 13px;
+        margin-top: 5px;
+        font-weight: 500;
+    }
+    
+    /* 애니메이션 효과 */
+    @keyframes pulse {
+        0% { opacity: 0.7; }
+        50% { opacity: 1; }
+        100% { opacity: 0.7; }
+    }
+    
+    /* 상태 컨테이너 및 칩 스타일 개선 */
+    .status-container {
+        display: flex;
+        align-items: center;
+        margin-bottom: 24px;
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+    
+    /* 상태 칩 스타일 */
+    .status-chip {
+        padding: 8px 16px;
+        border-radius: 20px;
+        font-size: 13px;
+        font-weight: 700;
+        display: inline-block;
+        letter-spacing: 0.5px;
+    }
+    
+    .status-chip.success {
+        background-color: #4CAF50;  /* 선명한 녹색 */
+        color: white;
+    }
+    
+    /* 처리시간 표시 스타일 */
+    .processing-time {
+        color: #1877F2;  /* 버튼 색상과 일치 */
+        font-size: 14px;
+        font-weight: 600;
+        border-left: 1px solid #E0E0E0;
+        padding-left: 12px;
+    }
+    
+    /* 타임스탬프 스타일 */
+    .timestamp {
+        color: #424242;
+        font-size: 14px;
+        margin-left: auto;
+        font-weight: 500;
+    }
+    
+    /* 다크모드 대응 */
+    @media (prefers-color-scheme: dark) {
+        .stButton > button {
+            background-color: #1877F2 !important;  /* 페이스북 파란색 유지 */
+            color: #FFFFFF !important;
+            box-shadow: 0 4px 8px rgba(24, 119, 242, 0.5) !important;
+        }
+        
+        .stButton > button:hover {
+            background-color: #0D6EFD !important;
+            box-shadow: 0 6px 12px rgba(24, 119, 242, 0.6) !important;
+        }
+        
+        .stButton > button:disabled {
+            background-color: #616161 !important;  /* 다크모드에서 비활성화 색상 */
+            color: #9E9E9E !important;
+        }
+        
+        .progress-message {
+            color: #4E89E8;
+        }
+        
+        .status-chip.success {
+            background-color: #66BB6A;
+        }
+        
+        .processing-time {
+            color: #4E89E8;
+            border-left: 1px solid #424242;
+        }
+        
+        .elapsed-time,
+        .timestamp {
+            color: #E0E0E0;
+        }
+    }
+</style>
+"""
+
+# 프로그레스바 스타일 - 모던하고 애니메이션 효과 적용
+PROGRESS_BAR_STYLE = """
+<style>
+    /* 커스텀 프로그레스바 컨테이너 */
+    .custom-progress-container {
+        width: 100%;
+        height: 20px;
+        background-color: #f0f0f0;
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
+        margin: 20px 0;
+        position: relative;
+    }
+    
+    /* 프로그레스바 채움 영역 */
+    .custom-progress-bar {
+        height: 100%;
+        background: linear-gradient(45deg, #00498c, #0066cc);
+        border-radius: 10px;
+        transition: width 0.5s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        animation: progress-shine 2s linear infinite;
+        background-size: 200% 100%;
+    }
+    
+    /* 프로그레스 텍스트 */
+    .custom-progress-text {
+        color: white;
+        font-size: 12px;
+        font-weight: bold;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+        position: relative;
+        z-index: 2;
+    }
+    
+    /* 반짝임 효과 애니메이션 */
+    @keyframes progress-shine {
+        0% {
+            background-position: 200% 0;
+        }
+        100% {
+            background-position: -200% 0;
+        }
+    }
+    
+    /* 다크모드 대응 */
+    @media (prefers-color-scheme: dark) {
+        .custom-progress-container {
+            background-color: #333;
+            box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
+        }
+        
+        .custom-progress-bar {
+            background: linear-gradient(45deg, #0066cc, #0088ff);
+        }
+    }
+</style>
+"""
+
 # Material 디자인 다운로드 버튼 스타일 - 다크모드 (파란색 제거)
 DOWNLOAD_BUTTON_STYLE = """
 <style>

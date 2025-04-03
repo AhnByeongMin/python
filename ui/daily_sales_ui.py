@@ -1,8 +1,8 @@
 """
-일일 매출 현황 UI 모듈 - 엑셀 내보내기 기능 업데이트
+일일 매출 현황 UI 모듈 - 버튼 UI 개선 및 프로그레스바 추가 버전
 
 이 모듈은 일일 매출 현황 탭의 UI 요소와 사용자 상호작용을 처리합니다.
-비즈니스 로직과 UI를 분리하여 유지보수성을 향상시킵니다.
+개선된 버튼 UI와 분석 진행도를 표시하는 프로그레스바를 포함합니다.
 """
 
 import streamlit as st
@@ -10,6 +10,7 @@ import pandas as pd
 import base64
 from datetime import datetime, timedelta
 import uuid
+import time
 from typing import Dict, List, Optional, Any, Tuple
 
 # 비즈니스 로직 가져오기
@@ -21,7 +22,7 @@ from logic.daily_sales_logic import (
 # CSS 스타일 가져오기
 from styles.daily_sales_styles import (
     DAILY_SALES_TAB_STYLE, DOWNLOAD_BUTTON_STYLE,
-    USAGE_GUIDE_MARKDOWN, DARK_TABLE_STYLE
+    USAGE_GUIDE_MARKDOWN, DARK_TABLE_STYLE, IMPROVED_BUTTON_STYLE, PROGRESS_BAR_STYLE
 )
 
 # 유틸리티 함수 가져오기
@@ -33,6 +34,8 @@ def show():
     # CSS 스타일 적용
     st.markdown(DAILY_SALES_TAB_STYLE, unsafe_allow_html=True)
     st.markdown(DARK_TABLE_STYLE, unsafe_allow_html=True)
+    st.markdown(IMPROVED_BUTTON_STYLE, unsafe_allow_html=True)
+    st.markdown(PROGRESS_BAR_STYLE, unsafe_allow_html=True)
     
     # 타이틀 및 설명
     st.title("📈 일일 매출 현황")
@@ -57,6 +60,18 @@ def show():
         st.session_state.selected_date = None
     if 'selected_date_str' not in st.session_state:
         st.session_state.selected_date_str = None
+    if 'analysis_in_progress' not in st.session_state:
+        st.session_state.analysis_in_progress = False
+    if 'analysis_total_steps' not in st.session_state:
+        st.session_state.analysis_total_steps = 5
+    if 'analysis_current_step' not in st.session_state:
+        st.session_state.analysis_current_step = 0
+    if 'analysis_messages' not in st.session_state:
+        st.session_state.analysis_messages = []
+    if 'analysis_start_time' not in st.session_state:
+        st.session_state.analysis_start_time = None
+    if 'analysis_elapsed_time' not in st.session_state:
+        st.session_state.analysis_elapsed_time = None
 
     # 파일 업로드 UI
     st.markdown('<div class="material-card upload-card">', unsafe_allow_html=True)
@@ -74,53 +89,135 @@ def show():
         # 키 이름 변경: installation_file -> daily_installation_file
         installation_file = st.file_uploader("설치매출 엑셀 파일을 업로드하세요", type=['xlsx', 'xls'], key="daily_installation_file")
     
-    # 분석 버튼
-    st.markdown('<div class="button-container">', unsafe_allow_html=True)
-    # 키 이름 변경: analyze_daily_sales -> analyze_daily_button
-    analyze_button = st.button("분석 시작", key="analyze_daily_button")
+    # 분석 시작 버튼 (개선된 UI)
+    st.markdown('<div class="custom-button-container">', unsafe_allow_html=True)
+    analyze_button_key = "analyze_daily_button_improved"
+    analyze_button = st.button("분석 시작", key=analyze_button_key, disabled=st.session_state.analysis_in_progress)
     st.markdown('</div>', unsafe_allow_html=True)
+    
+    # 진행 상태 표시 영역
+    if st.session_state.analysis_in_progress:
+        progress_container = st.container()
+        with progress_container:
+            # 진행 상태 표시
+            progress = st.session_state.analysis_current_step / st.session_state.analysis_total_steps
+            progress_percent = int(progress * 100)
+            
+            # 커스텀 프로그레스바 HTML
+            progress_html = f"""
+            <div class="custom-progress-container">
+                <div class="custom-progress-bar" style="width: {progress_percent}%;">
+                    <span class="custom-progress-text">{progress_percent}%</span>
+                </div>
+            </div>
+            """
+            st.markdown(progress_html, unsafe_allow_html=True)
+            
+            # 현재 진행 중인 작업 메시지
+            if st.session_state.analysis_messages:
+                current_message = st.session_state.analysis_messages[-1]
+                st.markdown(f"<div class='progress-message'>{current_message}</div>", unsafe_allow_html=True)
+            
+            # 경과 시간 표시
+            if st.session_state.analysis_start_time:
+                elapsed = time.time() - st.session_state.analysis_start_time
+                st.markdown(f"<div class='elapsed-time'>경과 시간: {elapsed:.1f}초</div>", unsafe_allow_html=True)
+    
     st.markdown('</div>', unsafe_allow_html=True)  # 카드 닫기
     
     # 메인 로직
     if analyze_button and approval_file is not None:
-        # 파일 처리 진행 상태 표시
-        with st.spinner('파일 분석 중...'):
-            # 파일 위치 저장을 위해 seek(0)
-            approval_file.seek(0)
-            if installation_file is not None:
-                installation_file.seek(0)
-            
-            # 파일 처리 시도
-            approval_df, approval_error = process_approval_file(approval_file)
-            
-            installation_df = None
-            installation_error = None
-            if installation_file is not None:
-                installation_df, installation_error = process_installation_file(installation_file)
+        # 분석 시작 - 진행 상태 초기화
+        st.session_state.analysis_in_progress = True
+        st.session_state.analysis_current_step = 0
+        st.session_state.analysis_total_steps = 5  # 총 5단계로 구성
+        st.session_state.analysis_messages = ["분석 준비 중..."]
+        st.session_state.analysis_start_time = time.time()
         
-        # 오류 체크
-        if approval_error:
-            st.error(approval_error)
-        elif installation_file is not None and installation_error:
-            st.error(installation_error)
-        else:
-            # 세션 상태에 데이터프레임 저장
-            st.session_state.daily_approval_df = approval_df
-            st.session_state.daily_installation_df = installation_df
-            
-            # 분석 실행
-            results = analyze_sales_data(approval_df, installation_df)
-            
-            if 'error' in results:
-                st.error(results['error'])
-            else:
+        # 페이지 리프레시하여 프로그레스바 표시
+        st.rerun()
+
+    # 분석 진행 중이고, 아직 완료되지 않은 경우
+    elif st.session_state.analysis_in_progress and st.session_state.analysis_current_step < st.session_state.analysis_total_steps:
+        try:
+            # 현재 단계 진행
+            if st.session_state.analysis_current_step == 0:
+                # 단계 1: 파일 준비
+                st.session_state.analysis_messages.append("파일 준비 중...")
+                
+                # 파일 위치 저장을 위해 seek(0)
+                approval_file.seek(0)
+                if installation_file is not None:
+                    installation_file.seek(0)
+                
+                st.session_state.analysis_current_step += 1
+                st.rerun()
+                
+            elif st.session_state.analysis_current_step == 1:
+                # 단계 2: 승인매출 파일 처리
+                st.session_state.analysis_messages.append("승인매출 파일 처리 중...")
+                
+                # 승인매출 파일 처리
+                approval_df, approval_error = process_approval_file(approval_file)
+                
+                if approval_error:
+                    st.error(approval_error)
+                    st.session_state.analysis_in_progress = False
+                    st.rerun()
+                
+                st.session_state.daily_approval_df = approval_df
+                st.session_state.analysis_current_step += 1
+                st.rerun()
+                
+            elif st.session_state.analysis_current_step == 2:
+                # 단계 3: 설치매출 파일 처리 (있는 경우)
+                if installation_file is not None:
+                    st.session_state.analysis_messages.append("설치매출 파일 처리 중...")
+                    
+                    # 설치매출 파일 처리
+                    installation_df, installation_error = process_installation_file(installation_file)
+                    
+                    if installation_error:
+                        st.error(installation_error)
+                        # 설치 파일 에러가 있어도 계속 진행 (필수 아님)
+                    
+                    st.session_state.daily_installation_df = installation_df
+                else:
+                    st.session_state.daily_installation_df = None
+                
+                st.session_state.analysis_current_step += 1
+                st.rerun()
+                
+            elif st.session_state.analysis_current_step == 3:
+                # 단계 4: 데이터 분석
+                st.session_state.analysis_messages.append("데이터 분석 중...")
+                
+                # 분석 실행
+                approval_df = st.session_state.daily_approval_df
+                installation_df = st.session_state.daily_installation_df
+                
+                results = analyze_sales_data(approval_df, installation_df)
+                
+                if 'error' in results:
+                    st.error(results['error'])
+                    st.session_state.analysis_in_progress = False
+                    st.rerun()
+                
                 # 세션 상태에 결과 저장
                 st.session_state.cumulative_approval = results['cumulative_approval']
                 st.session_state.daily_approval = results['daily_approval']
                 st.session_state.cumulative_installation = results['cumulative_installation']
                 st.session_state.latest_date = results['latest_date']
                 
+                st.session_state.analysis_current_step += 1
+                st.rerun()
+                
+            elif st.session_state.analysis_current_step == 4:
+                # 단계 5: 날짜 정보 처리
+                st.session_state.analysis_messages.append("날짜 정보 처리 중...")
+                
                 # 사용 가능한 날짜 목록 가져오기 (주문 일자 기준)
+                approval_df = st.session_state.daily_approval_df
                 if '주문 일자' in approval_df.columns:
                     # NaT 제거 후 날짜만 추출하여 고유값 가져오기
                     valid_dates = approval_df['주문 일자'].dropna()
@@ -136,30 +233,34 @@ def show():
                             st.session_state.selected_date = unique_dates[0]
                             st.session_state.selected_date_str = unique_dates[0].strftime("%Y-%m-%d")
                 
-                # 결과 표시
-                display_results(
-                    st.session_state.cumulative_approval,
-                    st.session_state.daily_approval,
-                    st.session_state.cumulative_installation,
-                    st.session_state.latest_date,
-                    st.session_state.daily_approval_df,
-                    st.session_state.daily_installation_df
-                )
+                # 분석 완료 - 경과 시간 기록
+                end_time = time.time()
+                st.session_state.analysis_elapsed_time = end_time - st.session_state.analysis_start_time
+                st.session_state.analysis_messages.append(f"분석 완료! (소요시간: {st.session_state.analysis_elapsed_time:.2f}초)")
+                
+                # 분석 완료 플래그 설정
+                st.session_state.analysis_current_step += 1
+                st.session_state.analysis_in_progress = False
+                st.rerun()
+        
+        except Exception as e:
+            # 오류 발생 시 처리
+            st.error(f"분석 중 오류가 발생했습니다: {str(e)}")
+            st.session_state.analysis_in_progress = False
+            st.rerun()
     
-    # 이미 분석된 결과가 있으면 표시
-    elif (
-        st.session_state.cumulative_approval is not None and 
-        st.session_state.daily_approval is not None
-    ):
+    # 분석 결과 표시 (분석이 완료된 경우에만)
+    if st.session_state.cumulative_approval is not None and not st.session_state.analysis_in_progress:
         display_results(
-            st.session_state.cumulative_approval,
-            st.session_state.daily_approval,
-            st.session_state.cumulative_installation,
+            st.session_state.cumulative_approval, 
+            st.session_state.daily_approval, 
+            st.session_state.cumulative_installation, 
             st.session_state.latest_date,
             st.session_state.daily_approval_df,
-            st.session_state.daily_installation_df
+            st.session_state.daily_installation_df,
+            st.session_state.analysis_elapsed_time
         )
-    else:
+    elif not st.session_state.analysis_in_progress:
         # 파일 업로드 전 안내 화면
         st.markdown('<div class="material-card info-card">', unsafe_allow_html=True)
         st.info("승인매출 파일을 업로드하고 설치매출 파일(선택사항)도 업로드한 후 분석 시작 버튼을 클릭하세요.")
@@ -172,7 +273,8 @@ def display_results(
     cumulative_installation: Optional[pd.DataFrame],
     latest_date: str,
     approval_df: pd.DataFrame,
-    installation_df: Optional[pd.DataFrame]
+    installation_df: Optional[pd.DataFrame],
+    elapsed_time: Optional[float] = None
 ):
     """
     분석 결과를 표시하는 함수 - 세 테이블을 한 줄에 나란히 표시
@@ -184,12 +286,23 @@ def display_results(
         latest_date: 최신 날짜
         approval_df: 원본 승인 데이터프레임
         installation_df: 원본 설치 데이터프레임
+        elapsed_time: 분석 소요 시간 (초)
     """
     # 현재 날짜 및 시간 가져오기
     current_time = datetime.now()
     
     # 데이터 정보 표시
-    st.markdown(f'<div class="status-container"><div class="status-chip success">분석 완료</div><div class="timestamp">{current_time.strftime("%Y년 %m월 %d일 %H시 %M분")} 기준</div></div>', unsafe_allow_html=True)
+    status_html = f'<div class="status-container">'
+    status_html += f'<div class="status-chip success">분석 완료</div>'
+    
+    # 소요 시간 표시
+    if elapsed_time is not None:
+        status_html += f'<div class="processing-time">처리 시간: {elapsed_time:.2f}초</div>'
+    
+    status_html += f'<div class="timestamp">{current_time.strftime("%Y년 %m월 %d일 %H시 %M분")} 기준</div>'
+    status_html += f'</div>'
+    
+    st.markdown(status_html, unsafe_allow_html=True)
     
     # 세 개의 테이블을 한 줄에 나란히 배치
     st.markdown('<div class="results-row">', unsafe_allow_html=True)

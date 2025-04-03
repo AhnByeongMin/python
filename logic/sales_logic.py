@@ -42,8 +42,8 @@ def process_excel(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
         # 빈 열 제거 (Unnamed 열 등)
         df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
         
-        # VAT 세율 설정 - 1.1%
-        vat_rate = 0.011
+        # VAT 세율 설정 - 101%
+        vat_rate = 0.1
         
         # 필요한 컬럼 확인 - 대분류 대신 품목명 사용
         required_columns = ["월 렌탈 금액", "약정 기간 값", "총 패키지 할인 회차", 
@@ -77,10 +77,10 @@ def process_excel(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
         
         # 매출금액 계산 공식
         df['매출금액'] = (df['월 렌탈 금액'] * (df['약정 기간 값'] - df['총 패키지 할인 회차']) + 
-                      df['판매 금액'] + df['선납 렌탈 금액'])
+                      df['판매 금액'] - df['일시불 판매 추가 할인 금액'] + df['선납 렌탈 금액'])
         
         # VAT 제외 매출금액 계산
-        df['매출금액(VAT제외)'] = df['매출금액'] / (1 + vat_rate)
+        df['매출금액(VAT제외)'] = round(df['매출금액'] / (1 + vat_rate), 0)
         
         # 날짜 컬럼 포맷팅
         df = format_date_columns(df)

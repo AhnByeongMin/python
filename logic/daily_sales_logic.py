@@ -121,7 +121,6 @@ def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
         
     except Exception as e:
         return None, f"승인매출 파일 처리 중 오류가 발생했습니다: {str(e)}"
-
 def process_installation_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """
     설치매출 엑셀 파일을 처리하는 함수
@@ -189,7 +188,8 @@ def process_installation_file(file) -> Tuple[Optional[pd.DataFrame], Optional[st
                 "총 패키지 할인 회차": ["총패키지할인회차", "패키지 할인", "할인 회차", "패키지할인회차"],
                 "판매 금액": ["판매금액", "매출 금액"],
                 "선납 렌탈 금액": ["선납렌탈금액", "선납금액", "선납 금액"],
-                "매출액": ["순매출액", "매출금액", "매출", "net_sales", "net_revenue"]
+                "매출액": ["순매출액", "매출금액", "매출", "net_sales", "net_revenue"],
+                "품목명": ["상품명", "제품명", "상품 명", "제품 명", "품목 명"]
             }
             
             if req_col in similar_cols:
@@ -257,6 +257,156 @@ def process_installation_file(file) -> Tuple[Optional[pd.DataFrame], Optional[st
         
     except Exception as e:
         return None, f"설치매출 파일 처리 중 오류가 발생했습니다: {str(e)}"
+
+def analyze_installation_by_product_model(installation_df):
+    """
+    제품별 설치현황을 분석하는 함수 (안마의자 제품별 설치현황 표 생성)
+    
+    Args:
+        installation_df: 설치매출 데이터프레임
+        
+    Returns:
+        pd.DataFrame: 분석 결과 데이터프레임
+    """
+    if installation_df is None or installation_df.empty:
+        # 빈 결과 반환
+        return pd.DataFrame({
+            "제품명": ["합계"],
+            "직접": [0],
+            "연계": [0],
+            "총건": [0],
+            "비율": ["100.0%"]
+        })
+    
+    # 품목명 컬럼 확인
+    product_name_col = None
+    for col_name in ['품목명', '상품명', '제품명', '품목 명', '상품 명', '제품 명']:
+        if col_name in installation_df.columns:
+            product_name_col = col_name
+            break
+    
+    if product_name_col is None:
+        # 품목명 컬럼이 없는 경우 빈 결과 반환
+        return pd.DataFrame({
+            "제품명": ["합계"],
+            "직접": [0],
+            "연계": [0],
+            "총건": [0],
+            "비율": ["100.0%"]
+        })
+    
+    # 1. 안마의자 필터링 - 대분류 열과 품목명 열을 모두 확인
+    massage_chair_mask = installation_df["대분류"].astype(str).str.contains("안마의자", case=False, na=False)
+    
+    # 품목명에도 '안마'가 포함된 항목 추가 (대분류가 다른 경우를 위해)
+    massage_chair_mask |= installation_df[product_name_col].astype(str).str.contains("안마", case=False, na=False)
+    
+    massage_chair_data = installation_df[massage_chair_mask].copy()
+    
+    if massage_chair_data.empty:
+        # 빈 결과 반환
+        return pd.DataFrame({
+            "제품명": ["합계"],
+            "직접": [0],
+            "연계": [0],
+            "총건": [0],
+            "비율": ["100.0%"]
+        })
+    
+    # 2. 캠페인 필터링 (본사/연계합계와 동일) - 유연하게 수정
+    campaign_mask = (
+        massage_chair_data['일반회차 캠페인'].astype(str).str.strip() != ""  # ① 공백이 아닌 경우
+    ) & (
+        massage_chair_data['일반회차 캠페인'].astype(str).str.contains(r'^C-|^V-|캠|정규|재분배', case=False, na=False)  # ② C-, V-, 캠, 정규, 재분배 포함
+    ) & ~(
+        massage_chair_data['일반회차 캠페인'].astype(str).str.startswith('CB-', na=False)  # ③ CB- 제외
+    )
+
+    
+    filtered_data = massage_chair_data[campaign_mask].copy()
+    
+    if filtered_data.empty:
+        # 빈 결과 반환
+        return pd.DataFrame({
+            "제품명": ["합계"],
+            "직접": [0],
+            "연계": [0],
+            "총건": [0],
+            "비율": ["100.0%"]
+        })
+    
+    # 3. 품목명 정리 (괄호 제거) - 개선된 방식으로
+    def clean_product_name(name):
+        if pd.isna(name):
+            return ""
+            
+        name_str = str(name).strip()
+        
+        # 괄호가 있으면 괄호 앞부분만 사용
+        if '(' in name_str:
+            return name_str.split('(')[0].strip()
+        
+        # 공백이 있다면 첫 단어만 추출 (ex: "팔코닉 B&O" -> "팔코닉")
+        if ' ' in name_str and '+' not in name_str:  # '+' 기호가 없는 경우에만
+            return name_str.split(' ')[0].strip()
+            
+        return name_str
+    
+    filtered_data['정리품목명'] = filtered_data[product_name_col].apply(clean_product_name)
+    
+    # 4. 직접/연계 분리 - 판매인입경로에 CRM이 포함된 경우 직접, 아닌 경우 연계
+    direct_mask = filtered_data['판매인입경로'].astype(str).str.contains('CRM', case=False, na=False)
+    direct_data = filtered_data[direct_mask]
+    affiliate_data = filtered_data[~direct_mask]
+    
+    # 5. 결과 데이터프레임 생성
+    result_data = []
+    
+    # 각 제품별 건수 집계
+    product_models = filtered_data['정리품목명'].dropna().unique()
+    
+    for model in product_models:
+        if not model:  # 빈 문자열 제외
+            continue
+            
+        direct_count = len(direct_data[direct_data['정리품목명'] == model])
+        affiliate_count = len(affiliate_data[affiliate_data['정리품목명'] == model])
+        total_count = direct_count + affiliate_count
+        
+        if total_count == 0:  # 건수가 0인 경우 제외
+            continue
+            
+        # 각 제품의 비율 계산
+        percentage = (total_count / len(filtered_data)) * 100
+        
+        result_data.append({
+            "제품명": model,
+            "직접": direct_count,
+            "연계": affiliate_count,
+            "총건": total_count,
+            "비율": f"{percentage:.1f}%"
+        })
+    
+    # 정렬 (총건 기준 내림차순)
+    result_data = sorted(result_data, key=lambda x: x["총건"], reverse=True)
+    
+    # 합계 추가
+    total_direct = sum(item["직접"] for item in result_data)
+    total_affiliate = sum(item["연계"] for item in result_data)
+    total_count = total_direct + total_affiliate
+    
+    result_data.append({
+        "제품명": "합계",
+        "직접": total_direct,
+        "연계": total_affiliate,
+        "총건": total_count,
+        "비율": "100.0%"
+    })
+    
+    # 데이터프레임으로 변환
+    result_df = pd.DataFrame(result_data)
+    
+    return result_df
 
 def analyze_sales_data(
     approval_df: pd.DataFrame, 
@@ -474,7 +624,6 @@ def analyze_approval_data_by_product(df: pd.DataFrame) -> pd.DataFrame:
     result_df = pd.DataFrame(result_data)
     
     return result_df
-
 def create_excel_report(
     cumulative_approval: pd.DataFrame,
     daily_approval: pd.DataFrame,
@@ -756,6 +905,40 @@ def create_excel_report(
                 worksheet1.write(current_row, 8, row['온라인_매출액'], number_format)
                 
                 current_row += 1
+            
+            # 4. 안마의자 제품별 설치현황 추가 (설치매출 데이터가 있는 경우)
+            if original_installation_df is not None and not original_installation_df.empty:
+                # 안마의자 제품별 분석 실행
+                massage_chair_model_df = analyze_installation_by_product_model(original_installation_df)
+                
+                if not massage_chair_model_df.empty:
+                    # 약간의 간격 추가
+                    current_row += 2
+                    
+                    # 헤더 작성
+                    worksheet1.merge_range(current_row, 0, current_row, 4, '안마의자 제품별 설치현황', sub_header_format)
+                    current_row += 1
+                    
+                    # 컬럼 헤더
+                    worksheet1.write(current_row, 0, '제품명', header_format)
+                    worksheet1.write(current_row, 1, '직접', header_format)
+                    worksheet1.write(current_row, 2, '연계', header_format)
+                    worksheet1.write(current_row, 3, '총건', header_format)
+                    worksheet1.write(current_row, 4, '비율', header_format)
+                    current_row += 1
+                    
+                    # 데이터 작성
+                    for idx, (_, row) in enumerate(massage_chair_model_df.iterrows()):
+                        is_total = row['제품명'] == '합계'
+                        row_format = sub_header_format if is_total else data_format
+                        
+                        worksheet1.write(current_row, 0, row['제품명'], row_format)
+                        worksheet1.write(current_row, 1, row['직접'], row_format)
+                        worksheet1.write(current_row, 2, row['연계'], row_format)
+                        worksheet1.write(current_row, 3, row['총건'], row_format)
+                        worksheet1.write(current_row, 4, row['비율'], row_format)
+                        
+                        current_row += 1
         
         # 2. 승인매출 데이터 시트 - 원본 데이터 추가 (비어있는 열 제외, 매출금액(VAT제외) 제외)
         if original_approval_df is not None and not original_approval_df.empty:
@@ -810,7 +993,7 @@ def create_excel_report(
                                approval_data[col_name].astype(str).str.len().max() if not approval_data[col_name].empty else 0)
                 worksheet2.set_column(col_idx, col_idx, min(col_width + 2, 30))  # 최대 너비 30
             
-            # 데이터 쓰기
+# 데이터 쓰기
             for row_idx, (_, row) in enumerate(approval_data.iterrows(), 1):
                 for col_idx, col_name in enumerate(approval_data.columns):
                     value = row[col_name]

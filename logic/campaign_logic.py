@@ -15,7 +15,7 @@ import xlsxwriter
 from typing import Tuple, Dict, List, Optional, Any, Union
 
 # 설정 가져오기 (config.py에서 상수 가져오기)
-from config import CAMPAIGN_SETTINGS
+from utils.config import CAMPAIGN_SETTINGS
 
 def process_campaign_files(files) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """

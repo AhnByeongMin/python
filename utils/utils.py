@@ -18,7 +18,7 @@ import logging
 from typing import Union, Optional, Dict, List, Tuple, Any
 
 # 설정 파일 가져오기
-from config import (
+from .config import (
     API_SETTINGS, FIXED_HOLIDAYS, LUNAR_HOLIDAYS, ALTERNATIVE_HOLIDAYS,
     FILE_SETTINGS, ERROR_MESSAGES
 )

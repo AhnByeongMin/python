@@ -172,6 +172,8 @@ DAILY_SALES_TAB_STYLE = """
         color: #b0b0b0 !important;
         border-color: #333333 !important;
     }
+
+    
 </style>
 """
 
@@ -347,6 +349,76 @@ USAGE_GUIDE_MARKDOWN = """
 <li>선납 렌탈 금액</li>
 </ul>
 </div>
+"""
+
+# 요약 텍스트 박스 스타일
+SUMMARY_BOX_STYLE = """
+<style>
+    /* 요약 텍스트 박스 스타일 */
+    .summary-textbox {
+        margin-top: 20px;
+        border: 1px solid #333333;
+        border-radius: 5px;
+        padding: 15px;
+        background-color: #1e1e1e;
+        width: 60%;  /* 90%에서 60%로 변경 */
+        max-width: 500px; /* 최대 너비 추가 */
+        margin-left: auto;
+        margin-right: auto;
+        font-family: 'Roboto', sans-serif;
+        font-size: 0.8em;
+        line-height: 1.5;
+        color: #e0e0e0;
+    }
+
+    .summary-textbox-title {
+        font-weight: 700;
+        font-size: 1.1em;
+        margin-bottom: 10px;
+        color: #e0e0e0;
+    }
+
+    .summary-textbox-goal {
+        margin-bottom: 5px;
+        font-weight: 600;
+        color: #e0e0e0;
+    }
+
+    .summary-textbox-achievement {
+        margin-bottom: 15px;
+        font-weight: 600;
+        color: #e0e0e0;
+    }
+
+    .summary-textbox-team {
+        margin-bottom: 5px;
+        font-weight: 600;
+        color: #e0e0e0;
+    }
+
+    .summary-textbox-product {
+        margin-top: 10px;
+        font-weight: 600;
+        color: #e0e0e0;
+    }
+
+    .summary-textbox-total {
+        margin-top: 15px;
+        font-weight: 700;
+        color: #e0e0e0;
+        font-size: 1.1em;
+    }
+이렇게 구현하면:
+
+"목표 설정" expander를 통해 직접 목표와 연계 목표를 쉽게 입력할 수 있습니다.
+입력된 목표 금액은 세션 상태로 저장되어 페이지를 새로고침해도 유지됩니다.
+누적 승인 실적 데이터에서 직접/연계 매출액을 집계합니다.
+목표 달성률을 계산하여 표시합니다.
+매출액은 억 단위로 소수점 첫째자리까지 표시됩니다.
+이렇게 하면 요청하신 형식대로 "목표 매출"과 "누적 달성" 정보가 요약 텍스트 박스에 표시됩니다.
+
+
+</style>
 """
 
 # 이전 스타일들 (호환성을 위해 유지)

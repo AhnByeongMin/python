@@ -16,6 +16,53 @@ from typing import Dict, List, Optional, Any, Union, Tuple
 # utils.py에서 필요한 함수 가져오기
 from utils.utils import format_time, peek_file_content
 
+# 목표 데이터 정의 - 2025년 4월 기준 (설치매출 기준)
+INSTALLATION_TARGET_DATA = {
+    "안마의자": {
+        "직접": {"건수": 58, "매출액": 308948532},  # 본사
+        "연계": {"건수": 74, "매출액": 395939547},  # 연계
+        "온라인": {"건수": None, "매출액": 923000000}  # 온라인 (건수 목표 없음)
+    },
+    "라클라우드": {
+        "직접": {"건수": 60, "매출액": 94031407},  # 본사
+        "연계": {"건수": 22, "매출액": 34651871},  # 연계
+        "온라인": {"건수": None, "매출액": 55380000}  # 온라인 (건수 목표 없음)
+    },
+    "정수기": {
+        "직접": {"건수": 480, "매출액": 227049802},  # 본사
+        "연계": {"건수": 6, "매출액": 2952104},      # 연계
+        "온라인": {"건수": None, "매출액": 923000000}  # 온라인 (건수 목표 없음)
+    }
+}
+
+# 승인매출 목표 데이터 계산 (설치매출 목표의 105%)
+TARGET_DATA = {}
+for product, targets in INSTALLATION_TARGET_DATA.items():
+    TARGET_DATA[product] = {
+        "직접": {
+            "건수": targets["직접"]["건수"],  # 건수는 동일
+            "매출액": int(targets["직접"]["매출액"] * 1.05)  # 매출액은 105%
+        },
+        "연계": {
+            "건수": targets["연계"]["건수"],  # 건수는 동일
+            "매출액": int(targets["연계"]["매출액"] * 1.05)  # 매출액은 105%
+        },
+        "온라인": {
+            "건수": targets["온라인"]["건수"],  # 건수는 동일
+            "매출액": int(targets["온라인"]["매출액"] * 1.05)  # 매출액은 105%
+        }
+    }
+
+# 월별 합계 목표 (상단 합계 행 계산용)
+TOTAL_TARGET = {
+    "직접": {"건수": sum(item["직접"]["건수"] for item in TARGET_DATA.values() if item["직접"]["건수"] is not None),
+             "매출액": sum(item["직접"]["매출액"] for item in TARGET_DATA.values())},
+    "연계": {"건수": sum(item["연계"]["건수"] for item in TARGET_DATA.values() if item["연계"]["건수"] is not None),
+             "매출액": sum(item["연계"]["매출액"] for item in TARGET_DATA.values())},
+    "온라인": {"건수": None,  # 온라인은 건수 목표 없음
+              "매출액": sum(item["온라인"]["매출액"] for item in TARGET_DATA.values())}
+}
+
 def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """
     승인매출 엑셀 파일을 처리하는 함수
@@ -121,6 +168,7 @@ def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
         
     except Exception as e:
         return None, f"승인매출 파일 처리 중 오류가 발생했습니다: {str(e)}"
+
 def process_installation_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """
     설치매출 엑셀 파일을 처리하는 함수
@@ -534,14 +582,19 @@ def analyze_approval_data_by_product(df: pd.DataFrame) -> pd.DataFrame:
         # 빈 결과 반환
         return pd.DataFrame({
             "제품": ["안마의자", "라클라우드", "정수기", "총합계"],
+            "목표_건수": [0, 0, 0, 0],
+            "목표_매출액": [0, 0, 0, 0],
             "총승인(본사/연계)_건수": [0, 0, 0, 0],
             "총승인(본사/연계)_매출액": [0, 0, 0, 0],
+            "달성률_건수": [0, 0, 0, 0],
+            "달성률_매출액": [0, 0, 0, 0],
             "본사직접승인_건수": [0, 0, 0, 0],
             "본사직접승인_매출액": [0, 0, 0, 0],
             "연계승인_건수": [0, 0, 0, 0],
             "연계승인_매출액": [0, 0, 0, 0],
             "온라인_건수": [0, 0, 0, 0],
-            "온라인_매출액": [0, 0, 0, 0]
+            "온라인_매출액": [0, 0, 0, 0],
+            "온라인달성률_매출액": [0, 0, 0, 0]
         })
     
     # 제품 종류 정의
@@ -579,46 +632,103 @@ def analyze_approval_data_by_product(df: pd.DataFrame) -> pd.DataFrame:
     
     # 각 제품별 집계
     for product in products:
-        product_row = {"제품": product}
+        # 목표 데이터 가져오기
+        target_direct_count = TARGET_DATA[product]["직접"]["건수"]  # 본사 목표 건수
+        target_direct_amount = TARGET_DATA[product]["직접"]["매출액"]  # 본사 목표 매출액
+        target_affiliate_count = TARGET_DATA[product]["연계"]["건수"]  # 연계 목표 건수
+        target_affiliate_amount = TARGET_DATA[product]["연계"]["매출액"]  # 연계 목표 매출액
+        target_online_amount = TARGET_DATA[product]["온라인"]["매출액"]  # 온라인 목표 매출액
+        
+        # 목표 합계 계산
+        target_total_count = (target_direct_count or 0) + (target_affiliate_count or 0)  # 건수 목표 합계
+        target_total_amount = target_direct_amount + target_affiliate_amount  # 매출액 목표 합계
         
         # 제품 필터 마스크
         product_mask = df['대분류'].astype(str).str.contains(product)
         
         # 1. 총승인(본사/연계)
         hq_link_product = hq_link_df[hq_link_df['대분류'].astype(str).str.contains(product)]
-        product_row["총승인(본사/연계)_건수"] = len(hq_link_product)
-        product_row["총승인(본사/연계)_매출액"] = hq_link_product[revenue_column].sum()
+        total_count = len(hq_link_product)
+        total_amount = hq_link_product[revenue_column].sum()
+        
+        # 달성률 계산 (목표가 0인 경우 0으로 처리)
+        count_achievement_rate = (total_count / target_total_count * 100) if target_total_count > 0 else 0
+        amount_achievement_rate = (total_amount / target_total_amount * 100) if target_total_amount > 0 else 0
         
         # 2. 본사직접승인
         hq_product = hq_df[hq_df['대분류'].astype(str).str.contains(product)]
-        product_row["본사직접승인_건수"] = len(hq_product)
-        product_row["본사직접승인_매출액"] = hq_product[revenue_column].sum()
+        direct_count = len(hq_product)
+        direct_amount = hq_product[revenue_column].sum()
         
         # 3. 연계승인
         link_product = link_df[link_df['대분류'].astype(str).str.contains(product)]
-        product_row["연계승인_건수"] = len(link_product)
-        product_row["연계승인_매출액"] = link_product[revenue_column].sum()
+        affiliate_count = len(link_product)
+        affiliate_amount = link_product[revenue_column].sum()
         
         # 4. 온라인
         online_product = online_df[online_df['대분류'].astype(str).str.contains(product)]
-        product_row["온라인_건수"] = len(online_product)
-        product_row["온라인_매출액"] = online_product[revenue_column].sum()
+        online_count = len(online_product)
+        online_amount = online_product[revenue_column].sum()
         
-        result_data.append(product_row)
+        # 온라인 달성률 계산
+        online_achievement_rate = (online_amount / target_online_amount * 100) if target_online_amount > 0 else 0
+        
+        # 결과 추가
+        result_data.append({
+            "제품": product,
+            "목표_건수": target_total_count,
+            "목표_매출액": target_total_amount,
+            "총승인(본사/연계)_건수": total_count,
+            "총승인(본사/연계)_매출액": total_amount,
+            "달성률_건수": count_achievement_rate,
+            "달성률_매출액": amount_achievement_rate,
+            "본사직접승인_건수": direct_count,
+            "본사직접승인_매출액": direct_amount,
+            "연계승인_건수": affiliate_count,
+            "연계승인_매출액": affiliate_amount,
+            "온라인_건수": online_count,
+            "온라인_매출액": online_amount,
+            "온라인달성률_매출액": online_achievement_rate
+        })
     
     # 총합계 행 추가
-    total_row = {
+    # 목표 총합계
+    target_total_count = sum(row["목표_건수"] for row in result_data)
+    target_total_amount = sum(row["목표_매출액"] for row in result_data)
+    target_total_online_amount = sum(TARGET_DATA[product]["온라인"]["매출액"] for product in products)
+    
+    # 실적 합계
+    total_count_sum = sum(row["총승인(본사/연계)_건수"] for row in result_data)
+    total_amount_sum = sum(row["총승인(본사/연계)_매출액"] for row in result_data)
+    direct_count_sum = sum(row["본사직접승인_건수"] for row in result_data)
+    direct_amount_sum = sum(row["본사직접승인_매출액"] for row in result_data)
+    affiliate_count_sum = sum(row["연계승인_건수"] for row in result_data)
+    affiliate_amount_sum = sum(row["연계승인_매출액"] for row in result_data)
+    online_count_sum = sum(row["온라인_건수"] for row in result_data)
+    online_amount_sum = sum(row["온라인_매출액"] for row in result_data)
+    
+    # 총 달성률 계산
+    total_count_achievement_rate = (total_count_sum / target_total_count * 100) if target_total_count > 0 else 0
+    total_amount_achievement_rate = (total_amount_sum / target_total_amount * 100) if target_total_amount > 0 else 0
+    online_total_achievement_rate = (online_amount_sum / target_total_online_amount * 100) if target_total_online_amount > 0 else 0
+    
+    # 총합계 행 추가
+    result_data.append({
         "제품": "총합계",
-        "총승인(본사/연계)_건수": sum(row["총승인(본사/연계)_건수"] for row in result_data),
-        "총승인(본사/연계)_매출액": sum(row["총승인(본사/연계)_매출액"] for row in result_data),
-        "본사직접승인_건수": sum(row["본사직접승인_건수"] for row in result_data),
-        "본사직접승인_매출액": sum(row["본사직접승인_매출액"] for row in result_data),
-        "연계승인_건수": sum(row["연계승인_건수"] for row in result_data),
-        "연계승인_매출액": sum(row["연계승인_매출액"] for row in result_data),
-        "온라인_건수": sum(row["온라인_건수"] for row in result_data),
-        "온라인_매출액": sum(row["온라인_매출액"] for row in result_data)
-    }
-    result_data.append(total_row)
+        "목표_건수": target_total_count,
+        "목표_매출액": target_total_amount,
+        "총승인(본사/연계)_건수": total_count_sum,
+        "총승인(본사/연계)_매출액": total_amount_sum,
+        "달성률_건수": total_count_achievement_rate,
+        "달성률_매출액": total_amount_achievement_rate,
+        "본사직접승인_건수": direct_count_sum,
+        "본사직접승인_매출액": direct_amount_sum,
+        "연계승인_건수": affiliate_count_sum,
+        "연계승인_매출액": affiliate_amount_sum,
+        "온라인_건수": online_count_sum,
+        "온라인_매출액": online_amount_sum,
+        "온라인달성률_매출액": online_total_achievement_rate
+    })
     
     # 데이터프레임으로 변환
     result_df = pd.DataFrame(result_data)

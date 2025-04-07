@@ -1,0 +1,52 @@
+{
+    "monthly_targets": {
+      "1": {
+        "direct_target": 637079377.9,
+        "affiliate_target": 483198007.5
+      },
+      "2": {
+        "direct_target": 624064416.5,
+        "affiliate_target": 458209653.2
+      },
+      "3": {
+        "direct_target": 648472018.3,
+        "affiliate_target": 463179204.7
+      },
+      "4": {
+        "direct_target": 630029743,
+        "affiliate_target": 433543524.1
+      },
+      "5": {
+        "direct_target": 757239777.4,
+        "affiliate_target": 584571060.3
+      },
+      "6": {
+        "direct_target": 608782879.8,
+        "affiliate_target": 408622318.6
+      },
+      "7": {
+        "direct_target": 575887424.2,
+        "affiliate_target": 366464449.5
+      },
+      "8": {
+        "direct_target": 602506644.4,
+        "affiliate_target": 420888813
+      },
+      "9": {
+        "direct_target": 680856555.5,
+        "affiliate_target": 527300395.6
+      },
+      "10": {
+        "direct_target": 670544171.5,
+        "affiliate_target": 526085523.9
+      },
+      "11": {
+        "direct_target": 612021553,
+        "affiliate_target": 451084620.3
+      },
+      "12": {
+        "direct_target": 599370109.6,
+        "affiliate_target": 434870894.6
+      }
+    }
+  }

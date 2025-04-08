@@ -308,19 +308,19 @@ def display_results(
         with col1:
             direct_target = st.number_input(
                 "직접 목표 매출(원)", 
-                value=st.session_state.direct_target,
+                value=int(st.session_state.direct_target),
                 step=10000000,
                 format="%d",
                 key="direct_target_input"
             )
         with col2:
             affiliate_target = st.number_input(
-                "연계 목표 매출(원)", 
-                value=st.session_state.affiliate_target,
-                step=10000000,
-                format="%d",
-                key="affiliate_target_input"
-            )
+            "연계 목표 매출(원)", 
+            value=int(st.session_state.affiliate_target),
+            step=10000000,
+            format="%d",
+            key="affiliate_target_input"
+        )
         
         # 저장 버튼
         if st.button("목표 저장", key="save_targets_button"):
@@ -359,6 +359,7 @@ def display_results(
     # 누적설치 기준 매출액 데이터 계산 - 변수 초기화 추가
     direct_sales = 0
     affiliate_sales = 0
+
     
     # 누적설치실적 데이터에서 매출액 계산 (누적설치 데이터 있는 경우)
     if cumulative_installation is not None and not cumulative_installation.empty:
@@ -373,30 +374,39 @@ def display_results(
                 # 직접/연계 매출액 집계
                 direct_sales += row['본사직접승인_매출액']
                 affiliate_sales += row['연계승인_매출액']
-    
-    # 나머지 함수 내용...
+
     
     # 목표 달성률 계산
-    total_target = st.session_state.direct_target + st.session_state.affiliate_target
-    direct_achievement = (direct_sales / st.session_state.direct_target * 100) if st.session_state.direct_target > 0 else 0
-    affiliate_achievement = (affiliate_sales / st.session_state.affiliate_target * 100) if st.session_state.affiliate_target > 0 else 0
-    total_achievement = ((direct_sales + affiliate_sales) / total_target * 100) if total_target > 0 else 0
-    
-    # 매출액 포맷팅 함수
+    total_target = direct_target + affiliate_target
+    direct_achievement = (direct_sales/2 / direct_target * 100) if direct_target > 0 else 0
+    affiliate_achievement = (affiliate_sales/2 / affiliate_target * 100) if affiliate_target > 0 else 0
+    total_sales = direct_sales/2 + affiliate_sales/2
+    total_achievement = (total_sales / total_target * 100) if total_target > 0 else 0
+
+    ## 매출액 포맷팅 함수 - 한글 표기 방식으로 변경
     def format_amount(amount):
         if amount >= 100000000:  # 1억 이상
-            return f"{amount / 100000000:.1f}억"
+            # 1억 단위와 천만 단위 분리
+            억 = int(amount // 100000000)
+            천만 = int((amount % 100000000) // 10000000)
+            if 천만 > 0:
+                return f"{억}억{천만}천"
+            else:
+                return f"{억}억"
         elif amount >= 10000000:  # 1천만 이상
-            return f"{amount / 10000000:.0f}천만"
+            천만 = int(amount // 10000000)
+            return f"{천만}천"
         elif amount >= 1000000:  # 백만 단위
-            return f"{amount / 1000000:.0f}백만"
+            백만 = int(amount // 1000000)
+            return f"{백만}백"
         else:
-            return f"{amount:.0f}원"
-    
-    direct_sales_formatted = format_amount(direct_sales)
-    affiliate_sales_formatted = format_amount(affiliate_sales)
-    direct_target_formatted = format_amount(st.session_state.direct_target)
-    affiliate_target_formatted = format_amount(st.session_state.affiliate_target)
+            return f"{int(amount)}원"
+
+    direct_sales_formatted = format_amount(direct_sales/2)
+    affiliate_sales_formatted = format_amount(affiliate_sales/2)
+    total_sales_formatted = format_amount(total_sales)
+    direct_target_formatted = format_amount(direct_target)
+    affiliate_target_formatted = format_amount(affiliate_target)
     total_target_formatted = format_amount(total_target)
     
     # 세 개의 테이블을 한 줄에 나란히 배치
@@ -671,7 +681,7 @@ def display_results(
         <div class="summary-textbox-title">{date_str} CRM팀 실적_{time_str}</div>
         <br>
         <div class="summary-textbox-goal">목표 매출 : {direct_target_formatted}(직), {affiliate_target_formatted}(연), 총 {total_target_formatted}</div>
-        <div class="summary-textbox-achievement">누적 달성: {direct_sales_formatted}(직 {direct_achievement:.1f}%), {affiliate_sales_formatted}(연 {affiliate_achievement:.1f}%), 총({total_achievement:.1f}%)</div>
+        <div class="summary-textbox-achievement">누적 달성: {direct_sales_formatted}(직 {direct_achievement:.1f}%), {affiliate_sales_formatted}(연 {affiliate_achievement:.1f}%), {total_sales_formatted}(총 {total_achievement:.1f}%)</div>
         <br>
         <div class="summary-textbox-team">🔄 CRM팀 : 총 {crm_total}건</div>
         <div>{crm_details}</div>

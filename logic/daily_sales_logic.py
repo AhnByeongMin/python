@@ -520,7 +520,9 @@ def analyze_sales_data(
         # 3. 누적설치실적 분석 (설치매출 데이터가 있는 경우)
         cumulative_installation = None
         if installation_df is not None and not installation_df.empty:
+            installation_df = installation_df.drop_duplicates()  # ✅ 중복 제거
             cumulative_installation = analyze_approval_data_by_product(installation_df)
+
         
         results["cumulative_installation"] = cumulative_installation
         
@@ -578,6 +580,10 @@ def analyze_approval_data_by_product(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         pd.DataFrame: 분석 결과 데이터프레임
     """
+
+    # ✅ 중복 제거 (접수번호나 유니크 키가 없다면 전체 행 기준으로)
+    df = df.drop_duplicates(subset=["계약 번호"])  # 또는 ["접수번호", "제품명"] 등
+
     if df.empty:
         # 빈 결과 반환
         return pd.DataFrame({

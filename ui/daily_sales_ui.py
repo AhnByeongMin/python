@@ -383,24 +383,28 @@ def display_results(
     total_sales = direct_sales/2 + affiliate_sales/2
     total_achievement = (total_sales / total_target * 100) if total_target > 0 else 0
 
-    ## 매출액 포맷팅 함수 - 한글 표기 방식으로 변경
+    ## 매출액 포맷팅 함수 - 한글 표기 방식 (백만 단위 반올림 포함)
     def format_amount(amount):
         if amount >= 100000000:  # 1억 이상
-            # 1억 단위와 천만 단위 분리
             억 = int(amount // 100000000)
-            천만 = int((amount % 100000000) // 10000000)
-            if 천만 > 0:
-                return f"{억}억{천만}천"
+            나머지 = amount % 100000000
+            천만_반올림 = round(나머지 / 10000000)  # 천만 단위로 반올림
+            if 천만_반올림 >= 10:
+                억 += 1
+                return f"{억}억"
+            elif 천만_반올림 > 0:
+                return f"{억}억{천만_반올림}천"
             else:
                 return f"{억}억"
         elif amount >= 10000000:  # 1천만 이상
-            천만 = int(amount // 10000000)
-            return f"{천만}천"
+            천만_반올림 = round(amount / 10000000)
+            return f"{천만_반올림}천"
         elif amount >= 1000000:  # 백만 단위
-            백만 = int(amount // 1000000)
-            return f"{백만}백"
+            백만_반올림 = round(amount / 1000000)
+            return f"{백만_반올림}백"
         else:
             return f"{int(amount)}원"
+
 
     direct_sales_formatted = format_amount(direct_sales/2)
     affiliate_sales_formatted = format_amount(affiliate_sales/2)

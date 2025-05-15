@@ -390,13 +390,22 @@ def analyze_installation_by_product_model(installation_df):
             
         name_str = str(name).strip()
         
+        # 앞에 괄호가 있는 경우 제거 (더 확실한 방법으로 처리)
+        # 예: (A)팔콘S 또는 (A) 팔콘S와 같은 형태 모두 처리
+        if name_str.startswith("(") and ")" in name_str:
+            # 첫 번째 닫는 괄호 위치 찾기
+            close_pos = name_str.find(")")
+            if close_pos >= 0:
+                # 괄호와 그 내용을 제거
+                name_str = name_str[close_pos + 1:].strip()
+        
         # 괄호가 있으면 괄호 앞부분만 사용
         if '(' in name_str:
-            return name_str.split('(')[0].strip()
+            name_str = name_str.split('(')[0].strip()
         
         # 공백이 있다면 첫 단어만 추출 (ex: "팔코닉 B&O" -> "팔코닉")
         if ' ' in name_str and '+' not in name_str:  # '+' 기호가 없는 경우에만
-            return name_str.split(' ')[0].strip()
+            name_str = name_str.split(' ')[0].strip()
             
         return name_str
     

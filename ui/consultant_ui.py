@@ -581,6 +581,8 @@ def generate_compact_sample_html_table() -> str:
 def create_compact_visualization(performance_df: pd.DataFrame):
     """
     팀별 비교 시각화를 위한 컴팩트한 차트 생성
+    빈 공간 없이 막대가 연속적으로 표시되는 방식
+    배경 및 그리드 스타일 개선
     
     Args:
         performance_df: 상담원 실적 데이터프레임
@@ -588,46 +590,129 @@ def create_compact_visualization(performance_df: pd.DataFrame):
     Returns:
         plotly.Figure: 시각화 차트
     """
-    # 현재 시간 기준 목표 콜타임 계산
-    current_target_seconds = calculate_target_calltime_seconds()
+    import plotly.graph_objects as go
+    import pandas as pd
+    import plotly.express as px
     
-    # 팀별 제품 유형 합계 막대 그래프
+    # 데이터 준비 - 팀별 요약
     team_summary = performance_df.groupby("조직").agg(
         안마의자=("안마의자", "sum"),
         라클라우드=("라클라우드", "sum"),
         정수기=("정수기", "sum"),
         더케어=("더케어", "sum"),
-        멤버십=("멤버십", "sum")
+        멤버십=("멤버십", "sum"),
+        총건수=("건수", "sum")
     ).reset_index()
     
-    # 차트 설정 - 작은 크기와 간소화된 레이아웃
+    # 색상 설정 - 더 선명한 색상으로 변경
+    colors = {
+        "안마의자": "#66c2a5",
+        "라클라우드": "#fcfc99",
+        "정수기": "#8da0cb",
+        "더케어": "#fc8d62",
+        "멤버십": "#80b1d3",
+        "총건수": "#4472C4"  # 더 진한 파란색으로 총건수 강조
+    }
+    
+    # 팀별 데이터 정리
+    team_data = {}
+    for team in team_summary["조직"].unique():
+        team_rows = team_summary[team_summary["조직"] == team].iloc[0]
+        
+        # 0건이 아닌 제품만 필터링
+        non_zero_products = {}
+        for product in ["안마의자", "라클라우드", "정수기", "더케어", "멤버십"]:
+            if team_rows[product] > 0:
+                non_zero_products[product] = team_rows[product]
+        
+        # 총건수 항상 포함
+        non_zero_products["총건수"] = team_rows["총건수"]
+        
+        team_data[team] = non_zero_products
+    
+    # 기본 그래프 생성 - Plotly Express 사용
+    # 0건이 아닌 제품만 포함하는 데이터프레임 생성
+    plot_data = []
+    
+    for team, products in team_data.items():
+        for product, value in products.items():
+            plot_data.append({
+                "팀": team,
+                "제품": product,
+                "건수": value
+            })
+    
+    # 데이터프레임 생성
+    plot_df = pd.DataFrame(plot_data)
+    
+    # 제품 유형 순서 지정 (총건수가 맨 마지막에 오도록)
+    category_order = ["안마의자", "라클라우드", "정수기", "더케어", "멤버십", "총건수"]
+    
+    # Plotly Express로 그래프 생성
     fig = px.bar(
-        team_summary,
-        x="조직",
-        y=["안마의자", "라클라우드", "정수기", "더케어", "멤버십"],
-        title="팀별 제품 유형 합계",
-        labels={"value": "건수", "variable": "제품 유형"},
-        height=300,  # 높이 축소
-        color_discrete_sequence=px.colors.qualitative.Pastel
+        plot_df,
+        x="팀",
+        y="건수",
+        color="제품",
+        barmode="group",
+        color_discrete_map=colors,
+        category_orders={"제품": category_order},
+        text="건수",
+        title="팀별 제품 유형 및 총건수 비교"
     )
     
-    # 레이아웃 간소화
+    # 총건수 막대 강조
+    for trace in fig.data:
+        if trace.name == "총건수":
+            trace.marker.line.width = 1.5
+            trace.marker.line.color = "black"
+    
+    # 레이아웃 설정 - 그리드 및 배경 개선
     fig.update_layout(
-        margin=dict(l=40, r=40, t=40, b=40),  # 마진 축소
+        # 높이 및 여백 설정
+        height=350,
+        margin=dict(l=40, r=40, t=60, b=40),
+        
+        # 범례 설정
         legend=dict(
-            orientation="h",  # 가로 방향 범례
+            orientation="h",
             yanchor="bottom",
             y=1.02,
             xanchor="right",
             x=1,
-            font=dict(size=8)  # 작은 폰트
+            font=dict(size=10)
         ),
-        font=dict(size=10)  # 전체 폰트 크기 축소
+        
+        # 폰트 설정
+        font=dict(size=10),
+        
+        # 배경 설정
+        plot_bgcolor="rgba(240, 240, 240, 0.2)",  # 연한 회색 배경
+        paper_bgcolor="rgba(0, 0, 0, 0)",  # 투명 배경
+        
+        # 그리드 설정
+        yaxis=dict(
+            showgrid=True,
+            gridwidth=1,
+            gridcolor="rgba(211, 211, 211, 0.3)"  # 연한 회색 그리드
+        ),
+        xaxis=dict(
+            showgrid=False  # x축 그리드 미표시
+        )
     )
     
-    # 축 레이블 간소화
-    fig.update_xaxes(title_font=dict(size=10))
-    fig.update_yaxes(title_font=dict(size=10))
+    # 스타일 개선
+    fig.update_traces(
+        textposition='outside',  # 텍스트 위치
+        textfont_size=9,         # 텍스트 크기
+        width=0.7                # 막대 너비 조정
+    )
+    
+    # 빈 공간 최소화
+    fig.update_layout(
+        bargap=0.2,        # 팀 사이 간격
+        bargroupgap=0.02   # 막대 간 간격
+    )
     
     return fig
 

@@ -11,6 +11,12 @@ from io import BytesIO
 import re
 import xlsxwriter
 from typing import Tuple, Dict, List, Optional, Any, Union
+import traceback
+import logging
+
+# 로깅 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def process_promotion_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """
@@ -273,166 +279,22 @@ def analyze_promotion_data(
 
 def create_excel_report(result_df: pd.DataFrame, original_df: pd.DataFrame) -> Optional[bytes]:
     """
-    분석 결과를 엑셀 파일로 변환하는 함수
-    
-    Args:
-        result_df: 분석 결과 데이터프레임
-        original_df: 원본 데이터프레임
-        
-    Returns:
-        Optional[bytes]: 엑셀 바이너리 데이터 또는 None (오류 발생 시)
+    가장 기본적인 방식으로 엑셀 파일 생성
     """
     try:
-        # 엑셀 파일 생성
         output = BytesIO()
         
+        # 모든 서식 제거하고 가장 기본적인 방식으로만 저장
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            # 워크북과 워크시트 설정
-            workbook = writer.book
+            # 결과 데이터 저장
+            result_df.to_excel(writer, sheet_name='프로모션결과', index=False)
             
-            # 공통 스타일 정의
-            header_format = workbook.add_format({
-                'bold': True,
-                'text_wrap': True,
-                'valign': 'vcenter',
-                'align': 'center',
-                'fg_color': '#305496',
-                'font_color': 'white',
-                'border': 1,
-                'border_color': '#D4D4D4'
-            })
-
-            title_format = workbook.add_format({
-                'bold': True,
-                'font_size': 12,
-                'align': 'center',
-                'valign': 'vcenter',
-                'fg_color': '#4472C4',
-                'font_color': 'white',
-                'border': 1
-            })
-
-            data_format = workbook.add_format({
-                'align': 'center',
-                'valign': 'vcenter',
-                'border': 1,
-                'border_color': '#D4D4D4'
-            })
-
-            number_format = workbook.add_format({
-                'align': 'center',
-                'valign': 'vcenter',
-                'border': 1,
-                'border_color': '#D4D4D4',
-                'num_format': '#,##0'
-            })
-
-            currency_format = workbook.add_format({
-                'align': 'right',
-                'valign': 'vcenter',
-                'border': 1,
-                'border_color': '#D4D4D4',
-                'num_format': '#,##0'
-            })
-
-            # 포상 획득 여부 스타일
-            reward_yes_format = workbook.add_format({
-                'align': 'center',
-                'valign': 'vcenter',
-                'border': 1,
-                'border_color': '#D4D4D4',
-                'bg_color': '#DFF2BF',
-                'color': '#4F8A10',
-                'bold': True
-            })
-            
-            reward_no_format = workbook.add_format({
-                'align': 'center',
-                'valign': 'vcenter',
-                'border': 1,
-                'border_color': '#D4D4D4',
-                'bg_color': '#FEEFB3',
-                'color': '#9F6000'
-            })
-
-            # 1. 프로모션 결과 시트 - 수정된 방식으로 워크시트 생성
-            worksheet1 = workbook.add_worksheet('프로모션결과')
-            
-            # 제목 추가
-            merge_end_col = min(len(result_df.columns) - 1, 7)  # 최대 H열까지만 병합
-            worksheet1.merge_range(0, 0, 0, merge_end_col, '상담사 프로모션 결과', title_format)
-            worksheet1.set_row(0, 25)  # 제목 행 높이 설정
-            
-            # 헤더 행 작성
-            for col_num, column_name in enumerate(result_df.columns):
-                worksheet1.write(1, col_num, column_name, header_format)
-            
-            # 데이터 행 작성
-            for row_num, row in result_df.iterrows():
-                row_idx = row_num + 2  # 헤더(1행) + 제목(1행) 다음부터 시작
-                for col_num, column_name in enumerate(result_df.columns):
-                    value = row[column_name]
-                    
-                    # 컬럼 유형에 따라 다른 형식 적용
-                    if column_name == "포상획득여부":
-                        if value == "Y":
-                            worksheet1.write(row_idx, col_num, value, reward_yes_format)
-                        else:
-                            worksheet1.write(row_idx, col_num, value, reward_no_format)
-                    elif column_name in ["누적승인(액)"]:
-                        worksheet1.write_number(row_idx, col_num, value, currency_format)
-                    elif column_name in ["순위", "누적승인(건)", "안", "라", "정", "케어", "멤버"]:
-                        worksheet1.write_number(row_idx, col_num, value, number_format)
-                    else:
-                        worksheet1.write(row_idx, col_num, value, data_format)
-            
-            # 컬럼 너비 설정
-            column_widths = {
-                0: 6,   # 순위
-                1: 15,  # 상담사
-                2: 8,   # 안
-                3: 8,   # 라
-                4: 8,   # 정
-                5: 8,   # 케어
-                6: 8,   # 멤버
-                7: 12,  # 누적승인(건)
-                8: 15,  # 누적승인(액)
-                9: 12,  # 포상획득여부
-            }
-            
-            # 데이터프레임 컬럼 수에 맞게 설정
-            for col_num, width in column_widths.items():
-                if col_num < len(result_df.columns):
-                    worksheet1.set_column(col_num, col_num, width)
-            
-            # 원본 데이터 시트 생성
+            # 원본 데이터 저장 (있는 경우)
             if original_df is not None and not original_df.empty:
-                # 원본 데이터를 엑셀 시트에 저장
                 original_df.to_excel(writer, sheet_name='원본데이터', index=False)
-                
-                # 워크시트 가져오기
-                worksheet2 = writer.sheets['원본데이터']
-                
-                # 헤더 행에 스타일 적용
-                for col_num, column_name in enumerate(original_df.columns):
-                    worksheet2.write(0, col_num, column_name, header_format)
-                
-                # 컬럼 너비 자동 조정
-                for col_num, column_name in enumerate(original_df.columns):
-                    # 컬럼 이름 길이와 데이터 길이 중 최대값으로 열 너비 설정
-                    max_len = max(
-                        len(str(column_name)),
-                        original_df[column_name].astype(str).str.len().max() if not original_df.empty else 0
-                    )
-                    worksheet2.set_column(col_num, col_num, min(max_len + 2, 30))  # 최대 30
         
-        # 버퍼 위치를 처음으로 되돌림
         output.seek(0)
-        excel_data = output.getvalue()
-        return excel_data
-        
-    except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        print(f"엑셀 파일 생성 중 오류: {str(e)}\n{error_details}")
+        return output.getvalue()
+    except:
+        # 모든 예외 처리 간소화
         return None

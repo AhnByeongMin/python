@@ -12,7 +12,8 @@ import streamlit as st
 from ui import sales_ui
 from ui import consultant_ui
 from ui import campaign_ui
-from ui import daily_sales_ui  # 새로운 일일 매출 현황 UI 모듈 추가
+from ui import daily_sales_ui
+from ui import promotion_ui  # 새로운 상담사 프로모션 UI 모듈 추가
 
 # 페이지 설정
 st.set_page_config(
@@ -167,8 +168,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 최상위 탭 생성 (일일 매출 현황 탭 추가)
-tab1, tab2, tab3, tab4 = st.tabs(["📊 매출 데이터 분석 도구", "👥 상담원 실적 현황", "📢 캠페인/정규분배 현황", "📈 일일 매출 현황"])
+# 최상위 탭 생성 (상담사 프로모션 탭 추가)
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📊 매출 데이터 분석 도구", 
+    "👥 상담원 실적 현황", 
+    "📢 캠페인/정규분배 현황", 
+    "📈 일일 매출 현황", 
+    "🏆 상담사 프로모션 진행현황"  # 새로운 탭 추가
+])
 
 # 탭1: 매출 데이터 분석 도구
 with tab1:
@@ -182,13 +189,17 @@ with tab2:
 with tab3:
     campaign_ui.show()
 
-# 탭4: 일일 매출 현황 (새로 추가)
+# 탭4: 일일 매출 현황
 with tab4:
     daily_sales_ui.show()
+
+# 탭5: 상담사 프로모션 진행현황 (새로 추가)
+with tab5:
+    promotion_ui.show()
 
 # 페이지 하단 정보
 st.markdown("""
 <div style="text-align: center; margin-top: 30px; padding: 10px; color: #666;">
-    © 2025 CRM팀 데이터 분석 도구 Made in BM | 버전 3.0.0
+    © 2025 CRM팀 데이터 분석 도구 Made in BM | 버전 3.1.0
 </div>
 """, unsafe_allow_html=True)

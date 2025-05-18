@@ -13,6 +13,9 @@ import xlsxwriter
 from typing import Tuple, Dict, List, Optional, Any, Union
 import traceback
 import logging
+from datetime import datetime
+import json
+import os
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -109,7 +112,12 @@ def analyze_promotion_data(
     direct_only: bool,
     criteria: List[str],
     min_condition: int,
-    reward_positions: int
+    reward_positions: int,
+    start_date: Optional[datetime] = None,  # 날짜 범위 시작
+    end_date: Optional[datetime] = None,    # 날짜 범위 끝
+    promotion_type: str = "포상금",         # 프로모션 유형: "포상금" 또는 "추첨권"
+    reward_config: List[Dict[str, int]] = None,  # 포상금 설정 리스트 [{"amount": 금액, "count": 인원수}, ...]
+    lottery_weights: Dict[str, int] = None  # 제품별 추첨권 가중치
 ) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """
     커스텀 프로모션 기준에 따라 상담사별 실적을 분석하는 함수
@@ -119,9 +127,14 @@ def analyze_promotion_data(
         include_products: 포함할 제품 목록 (안마의자, 라클라우드, 정수기)
         include_services: 서비스 품목 포함 여부 (더케어, 멤버십)
         direct_only: 직접 판매만 포함할지 여부
-        criteria: 기준 목록 (건수, 매출액)
+        criteria: 기준 목록 (건수, 매출액, 추첨권)
         min_condition: 최소 건수 조건
         reward_positions: 포상 순위 수
+        start_date: 시작 날짜 (선택사항)
+        end_date: 종료 날짜 (선택사항)
+        promotion_type: 프로모션 유형 ("포상금" 또는 "추첨권")
+        reward_config: 포상금 설정 리스트 [{"amount": 금액, "count": 인원수}, ...]
+        lottery_weights: 제품별 추첨권 가중치 (예: {"안마의자": 3, "라클라우드": 2, "정수기": 1})
         
     Returns:
         Tuple[Optional[pd.DataFrame], Optional[str]]: 결과 데이터프레임과 오류 메시지(있는 경우)
@@ -129,6 +142,17 @@ def analyze_promotion_data(
     try:
         # 데이터 필터링
         filtered_df = df.copy()
+        
+        # 날짜 기준 필터링 (주문 일자)
+        if start_date is not None and end_date is not None:
+            if "주문 일자" in filtered_df.columns:
+                # datetime 형식 확인
+                if not pd.api.types.is_datetime64_any_dtype(filtered_df["주문 일자"]):
+                    filtered_df["주문 일자"] = pd.to_datetime(filtered_df["주문 일자"], errors='coerce')
+                
+                # 시작일과 종료일 포함하여 필터링
+                filtered_df = filtered_df[(filtered_df["주문 일자"] >= start_date) & 
+                                         (filtered_df["주문 일자"] <= end_date)]
         
         # 1. 직접 판매만 필터링 (옵션에 따라)
         if direct_only:
@@ -170,25 +194,35 @@ def analyze_promotion_data(
             # 해당 상담사의 데이터 추출
             consultant_df = filtered_df[filtered_df["상담사"] == consultant]
             
-            # 제품별 건수
-            anma_count = len(consultant_df[consultant_df["대분류"].astype(str).str.contains("안마의자", case=False)])
-            lacloud_count = len(consultant_df[consultant_df["대분류"].astype(str).str.contains("라클라우드", case=False)])
-            water_count = len(consultant_df[consultant_df["대분류"].astype(str).str.contains("정수기", case=False)])
+            # 서비스 품목 마스크 먼저 생성
+            care_mask = (
+                consultant_df["대분류"].astype(str).str.contains("안마의자", case=False) & 
+                consultant_df["판매 유형"].astype(str).str.contains("케어", case=False)
+            )
+            
+            membership_mask = (
+                consultant_df["대분류"].astype(str).str.contains("정수기", case=False) & 
+                consultant_df["판매 유형"].astype(str).str.contains("멤버십|멤버쉽", case=False)
+            )
             
             # 서비스 품목 건수
-            care_count = len(
-                consultant_df[
-                    consultant_df["대분류"].astype(str).str.contains("안마의자", case=False) & 
-                    consultant_df["판매 유형"].astype(str).str.contains("케어", case=False)
-                ]
-            )
+            care_count = len(consultant_df[care_mask])
+            membership_count = len(consultant_df[membership_mask])
             
-            membership_count = len(
-                consultant_df[
-                    consultant_df["대분류"].astype(str).str.contains("정수기", case=False) & 
-                    consultant_df["판매 유형"].astype(str).str.contains("멤버십|멤버쉽", case=False)
-                ]
-            )
+            # 제품별 건수 - 서비스 제외하고 계산
+            anma_count = len(consultant_df[
+                consultant_df["대분류"].astype(str).str.contains("안마의자", case=False) & 
+                ~care_mask  # 케어 서비스가 아닌 안마의자만 카운트
+            ])
+            
+            lacloud_count = len(consultant_df[
+                consultant_df["대분류"].astype(str).str.contains("라클라우드", case=False)
+            ])
+            
+            water_count = len(consultant_df[
+                consultant_df["대분류"].astype(str).str.contains("정수기", case=False) & 
+                ~membership_mask  # 멤버십이 아닌 정수기만 카운트
+            ])
             
             # 총 승인 건수
             total_count = len(consultant_df)
@@ -199,6 +233,17 @@ def analyze_promotion_data(
             # 최소 조건 확인
             if total_count < min_condition:
                 continue
+                
+            # 추첨권 계산 (추첨권 프로모션인 경우)
+            lottery_tickets = 0
+            if promotion_type == "추첨권" and lottery_weights:
+                lottery_tickets = (
+                    anma_count * lottery_weights.get("안마의자", 0) +
+                    lacloud_count * lottery_weights.get("라클라우드", 0) +
+                    water_count * lottery_weights.get("정수기", 0) +
+                    care_count * lottery_weights.get("더케어", 0) +
+                    membership_count * lottery_weights.get("멤버십", 0)
+                )
             
             # 결과 딕셔너리 생성
             result_dict = {
@@ -211,6 +256,10 @@ def analyze_promotion_data(
                 "누적승인(건)": total_count,
                 "누적승인(액)": total_amount
             }
+            
+            # 추첨권 프로모션인 경우 추첨권 수 추가
+            if promotion_type == "추첨권":
+                result_dict["추첨권"] = lottery_tickets
             
             result_data.append(result_dict)
         
@@ -233,6 +282,15 @@ def analyze_promotion_data(
             elif criterion == "승인액":
                 sort_columns.append("누적승인(액)")
                 ascending_values.append(False)  # 내림차순
+            # 추첨권 기준 추가
+            elif criterion == "추첨권" and promotion_type == "추첨권":
+                sort_columns.append("추첨권")
+                ascending_values.append(False)  # 내림차순
+        
+        # 추첨권 모드일 때 기본 정렬 기준 설정 (명시적으로 지정되지 않은 경우)
+        if promotion_type == "추첨권" and not sort_columns:
+            sort_columns.append("추첨권")
+            ascending_values.append(False)  # 내림차순
         
         # 정렬
         if sort_columns:
@@ -241,8 +299,23 @@ def analyze_promotion_data(
         # 순위 부여
         result_df["순위"] = range(1, len(result_df) + 1)
         
-        # 포상 획득 여부 설정
-        result_df["포상획득여부"] = result_df["순위"].apply(lambda x: "Y" if x <= reward_positions else "N")
+        # 포상금 결정 (포상금 프로모션인 경우)
+        if promotion_type == "포상금" and reward_config:
+            # 등수 범위별 포상금액 적용
+            def get_reward_amount(rank):
+                current_pos = 1
+                for config in reward_config:
+                    amount = config["amount"]
+                    count = config["count"]
+                    if current_pos <= rank <= current_pos + count - 1:
+                        return f"{amount:,d}원"
+                    current_pos += count
+                return "N"
+            
+            result_df["포상금"] = result_df["순위"].apply(get_reward_amount)
+        else:
+            # 추첨권 프로모션 또는 포상금 설정이 없는 경우 포상 획득 여부만 표시
+            result_df["포상획득여부"] = result_df["순위"].apply(lambda x: "Y" if x <= reward_positions else "N")
         
         # 컬럼 순서 재정렬
         columns = ["순위", "상담사"]
@@ -267,7 +340,14 @@ def analyze_promotion_data(
             result_df["멤버"] = result_df["멤버십"]
         
         # 기본 컬럼 추가
-        columns.extend(["누적승인(건)", "누적승인(액)", "포상획득여부"])
+        columns.extend(["누적승인(건)", "누적승인(액)"])
+        
+        # 프로모션 유형에 따른 추가 컬럼
+        if promotion_type == "추첨권":
+            columns.append("추첨권")
+            columns.append("포상획득여부")
+        else:  # 포상금 프로모션
+            columns.append("포상금" if "포상금" in result_df.columns else "포상획득여부")
         
         # 필요한 컬럼만 선택 및 재정렬
         result_df = result_df[columns]
@@ -298,3 +378,72 @@ def create_excel_report(result_df: pd.DataFrame, original_df: pd.DataFrame) -> O
     except:
         # 모든 예외 처리 간소화
         return None
+
+def save_promotion_config(config_name: str, config_data: Dict) -> Tuple[bool, Optional[str]]:
+    """
+    프로모션 설정을 JSON 파일로 저장하는 함수
+    
+    Args:
+        config_name: 설정 이름
+        config_data: 설정 데이터 (딕셔너리)
+    
+    Returns:
+        Tuple[bool, Optional[str]]: 성공 여부와 오류 메시지(있는 경우)
+    """
+    try:
+        # 설정 파일 경로
+        config_dir = "promotion_configs"
+        os.makedirs(config_dir, exist_ok=True)
+        
+        filename = os.path.join(config_dir, f"{config_name}.json")
+        
+        # JSON 파일로 저장
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f, ensure_ascii=False, indent=2)
+        
+        return True, None
+    except Exception as e:
+        return False, f"설정 저장 중 오류가 발생했습니다: {str(e)}"
+
+def load_promotion_config(config_name: str) -> Tuple[Optional[Dict], Optional[str]]:
+    """
+    JSON 파일에서 프로모션 설정을 불러오는 함수
+    
+    Args:
+        config_name: 설정 이름
+    
+    Returns:
+        Tuple[Optional[Dict], Optional[str]]: 설정 데이터와 오류 메시지(있는 경우)
+    """
+    try:
+        # 설정 파일 경로
+        config_dir = "promotion_configs"
+        filename = os.path.join(config_dir, f"{config_name}.json")
+        
+        # 파일이 존재하지 않는 경우
+        if not os.path.exists(filename):
+            return None, f"설정 파일이 존재하지 않습니다: {config_name}"
+        
+        # JSON 파일 불러오기
+        with open(filename, 'r', encoding='utf-8') as f:
+            config_data = json.load(f)
+        
+        return config_data, None
+    except Exception as e:
+        return None, f"설정 불러오기 중 오류가 발생했습니다: {str(e)}"
+
+def list_promotion_configs() -> List[str]:
+    """
+    저장된 프로모션 설정 목록을 반환하는 함수
+    
+    Returns:
+        List[str]: 설정 이름 목록
+    """
+    config_dir = "promotion_configs"
+    os.makedirs(config_dir, exist_ok=True)
+    
+    # JSON 파일만 필터링
+    config_files = [f.replace('.json', '') for f in os.listdir(config_dir) 
+                    if f.endswith('.json')]
+    
+    return config_files

@@ -32,7 +32,7 @@
     "include_services": true,
     "direct_only": true,
     "criteria": [
-      "승인건수"
+      "승인액"
     ],
     "min_condition": 8,
     "include_all_consultants": true,

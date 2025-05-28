@@ -84,7 +84,7 @@ def process_promotion_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]
         
         # "V-", "C-", "캠", "정규", "재분배", "CB-" 중 하나라도 포함하는 값 필터링
         campaign_mask = (
-            df["일반회차 캠페인"].astype(str).str.contains("V-|C-|캠|정규|재분배|CB-", case=False)
+            df["일반회차 캠페인"].astype(str).str.contains("V-|C-|AS-|캠|정규|재분배|CB-", case=False)
         )
         df = df[campaign_mask].copy()
         

@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Any, Union, Tuple
 # utils.py에서 필요한 함수 가져오기
 from utils.utils import format_time, peek_file_content
 
+
 # 목표 데이터 정의 - 2025년 4월 기준 (설치매출 기준)
 INSTALLATION_TARGET_DATA = {
     "안마의자": {
@@ -365,7 +366,7 @@ def analyze_installation_by_product_model(installation_df):
     campaign_mask = (
         massage_chair_data['일반회차 캠페인'].astype(str).str.strip() != ""  # ① 공백이 아닌 경우
     ) & (
-        massage_chair_data['일반회차 캠페인'].astype(str).str.contains(r'^C-|^V-|캠|정규|재분배', case=False, na=False)  # ② C-, V-, 캠, 정규, 재분배 포함
+        massage_chair_data['일반회차 캠페인'].astype(str).str.contains(r'^C-|^V-|AS-|캠|정규|재분배', case=False, na=False)  # ② C-, V-, 캠, 정규, 재분배 포함
     ) & ~(
         massage_chair_data['일반회차 캠페인'].astype(str).str.startswith('CB-', na=False)  # ③ CB- 제외
     )
@@ -623,7 +624,8 @@ def analyze_approval_data_by_product(df: pd.DataFrame) -> pd.DataFrame:
     total_mask = df['일반회차 캠페인'].astype(str).str.match(r'^(?!CB-).*$')
     campaign_mask = (
         df['일반회차 캠페인'].astype(str).str.startswith('V-') | 
-        df['일반회차 캠페인'].astype(str).str.startswith('C-') | 
+        df['일반회차 캠페인'].astype(str).str.startswith('C-') |
+        df['일반회차 캠페인'].astype(str).str.startswith('AS-') | 
         df['일반회차 캠페인'].astype(str).str.contains('캠') | 
         df['일반회차 캠페인'].astype(str).str.contains('정규') | 
         df['일반회차 캠페인'].astype(str).str.contains('분배')

@@ -10,7 +10,7 @@ import numpy as np
 from io import BytesIO
 import re
 import xlsxwriter
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Tuple, Dict, List, Optional, Any, Union
 
 # utils.py에서 필요한 함수 가져오기
@@ -575,6 +575,48 @@ def analyze_consultant_performance(consultant_df: pd.DataFrame, calltime_df: pd.
     except Exception as e:
         return None, None, f"상담원 실적 분석 중 오류가 발생했습니다: {str(e)}"
 
+def time_string_to_excel_time(time_str):
+    """
+    시간 문자열을 Excel 시간 값으로 변환하는 함수
+    Excel에서 시간은 일(day)의 분수로 저장됨 (1시간 = 1/24)
+    
+    Args:
+        time_str: 시간 문자열 (예: "4:12:42", "0:45:30")
+        
+    Returns:
+        float: Excel 시간 값
+    """
+    try:
+        if pd.isna(time_str) or str(time_str).strip() == '':
+            return 0
+        
+        time_str = str(time_str).strip()
+        # 숫자와 콜론만 추출
+        time_parts = re.findall(r'\d+', time_str)
+        
+        if not time_parts:
+            return 0
+        
+        # 시간 형식에 따라 변환
+        if len(time_parts) == 3:  # HH:MM:SS
+            hours, minutes, seconds = map(int, time_parts)
+        elif len(time_parts) == 2:  # MM:SS
+            hours = 0
+            minutes, seconds = map(int, time_parts)
+        else:  # SS
+            hours = 0
+            minutes = 0
+            seconds = int(time_parts[0])
+        
+        # Excel 시간 값으로 변환 (하루의 분수)
+        total_seconds = hours * 3600 + minutes * 60 + seconds
+        excel_time = total_seconds / (24 * 60 * 60)  # 1일 = 86400초
+        
+        return excel_time
+        
+    except Exception:
+        return 0
+
 def create_excel_report(performance_df: pd.DataFrame, filtered_data: pd.DataFrame = None) -> Optional[bytes]:
     """
     상담원 실적 현황을 엑셀 파일로 변환하는 함수
@@ -634,12 +676,13 @@ def create_excel_report(performance_df: pd.DataFrame, filtered_data: pd.DataFram
             'num_format': '#,##0'
         })
 
+        # 시간 형식을 h:mm:ss 형식으로 설정
         time_format = workbook.add_format({
             'align': 'center',
             'valign': 'vcenter',
             'border': 1,
             'border_color': '#D4D4D4',
-            'num_format': '[h]:mm:ss'
+            'num_format': 'h:mm:ss'
         })
 
         summary_format = workbook.add_format({
@@ -650,6 +693,18 @@ def create_excel_report(performance_df: pd.DataFrame, filtered_data: pd.DataFram
             'border': 1,
             'border_color': '#D4D4D4',
             'font_color': '#363636'
+        })
+
+        # 요약 행의 시간 형식도 h:mm:ss로 설정
+        summary_time_format = workbook.add_format({
+            'bold': True,
+            'align': 'center',
+            'valign': 'vcenter',
+            'fg_color': '#8EA9DB',
+            'border': 1,
+            'border_color': '#D4D4D4',
+            'font_color': '#363636',
+            'num_format': 'h:mm:ss'
         })
 
         alternate_row_format = workbook.add_format({
@@ -705,9 +760,10 @@ def create_excel_report(performance_df: pd.DataFrame, filtered_data: pd.DataFram
                 # 숫자 형식 (콜건수)
                 elif col_num == 8:
                     worksheet.write(row_num, col_num, cell_value, number_format)
-                # 시간 형식 (콜타임)
+                # 시간 형식 (콜타임) - Excel 시간 값으로 변환
                 elif col_num == 9:
-                    worksheet.write_string(row_num, col_num, str(cell_value), time_format)
+                    excel_time_value = time_string_to_excel_time(cell_value)
+                    worksheet.write_number(row_num, col_num, excel_time_value, time_format)
                 # 일반 데이터
                 else:
                     worksheet.write(row_num, col_num, cell_value, row_format)
@@ -729,17 +785,15 @@ def create_excel_report(performance_df: pd.DataFrame, filtered_data: pd.DataFram
         # CRM 평균 콜타임 계산
         crm_time_seconds = []
         for time_str in crm_df["콜타임"]:
-            parts = time_str.split(":")
+            parts = str(time_str).split(":")
             if len(parts) == 3:
                 hours, minutes, seconds = map(int, parts)
                 total_seconds = hours * 3600 + minutes * 60 + seconds
                 crm_time_seconds.append(total_seconds)
 
         avg_crm_seconds = sum(crm_time_seconds) / len(crm_time_seconds) if crm_time_seconds else 0
-        hours = int(avg_crm_seconds // 3600)
-        minutes = int((avg_crm_seconds % 3600) // 60)
-        seconds = int(avg_crm_seconds % 60)
-        crm_avg_time = f"{hours}:{minutes:02d}:{seconds:02d}"
+        # Excel 시간 값으로 변환
+        crm_avg_excel_time = avg_crm_seconds / (24 * 60 * 60)
         
         worksheet.write(row_num, 0, crm_summary["순위"], summary_format)
         worksheet.write(row_num, 1, crm_summary["상담사"], summary_format)
@@ -750,7 +804,7 @@ def create_excel_report(performance_df: pd.DataFrame, filtered_data: pd.DataFram
             value = '-' if crm_summary[key] == 0 else crm_summary[key]
             worksheet.write(row_num, col_num + 2, value, summary_format)
         worksheet.write(row_num, 8, crm_summary["콜건수"], summary_format)
-        worksheet.write_string(row_num, 9, crm_avg_time, summary_format)
+        worksheet.write_number(row_num, 9, crm_avg_excel_time, summary_time_format)
         row_num += 1
         
         # 온라인 파트 데이터
@@ -769,9 +823,10 @@ def create_excel_report(performance_df: pd.DataFrame, filtered_data: pd.DataFram
                 # 숫자 형식 (콜건수)
                 elif col_num == 8:
                     worksheet.write(row_num, col_num, cell_value, number_format)
-                # 시간 형식 (콜타임)
+                # 시간 형식 (콜타임) - Excel 시간 값으로 변환
                 elif col_num == 9:
-                    worksheet.write_string(row_num, col_num, str(cell_value), time_format)
+                    excel_time_value = time_string_to_excel_time(cell_value)
+                    worksheet.write_number(row_num, col_num, excel_time_value, time_format)
                 # 일반 데이터
                 else:
                     worksheet.write(row_num, col_num, cell_value, row_format)
@@ -794,17 +849,15 @@ def create_excel_report(performance_df: pd.DataFrame, filtered_data: pd.DataFram
             # 온라인 평균 콜타임 계산
             online_time_seconds = []
             for time_str in online_df["콜타임"]:
-                parts = time_str.split(":")
+                parts = str(time_str).split(":")
                 if len(parts) == 3:
                     hours, minutes, seconds = map(int, parts)
                     total_seconds = hours * 3600 + minutes * 60 + seconds
                     online_time_seconds.append(total_seconds)
 
             avg_online_seconds = sum(online_time_seconds) / len(online_time_seconds) if online_time_seconds else 0
-            hours = int(avg_online_seconds // 3600)
-            minutes = int((avg_online_seconds % 3600) // 60)
-            seconds = int(avg_online_seconds % 60)
-            online_avg_time = f"{hours}:{minutes:02d}:{seconds:02d}"
+            # Excel 시간 값으로 변환
+            online_avg_excel_time = avg_online_seconds / (24 * 60 * 60)
 
             worksheet.write(row_num, 0, online_summary["순위"], summary_format)
             worksheet.write(row_num, 1, online_summary["상담사"], summary_format)
@@ -815,7 +868,7 @@ def create_excel_report(performance_df: pd.DataFrame, filtered_data: pd.DataFram
                 value = '-' if online_summary[key] == 0 else online_summary[key]
                 worksheet.write(row_num, col_num + 2, value, summary_format)
             worksheet.write(row_num, 8, online_summary["콜건수"], summary_format)
-            worksheet.write_string(row_num, 9, online_avg_time, summary_format)
+            worksheet.write_number(row_num, 9, online_avg_excel_time, summary_time_format)
         
         # 컬럼 너비 조정
         column_widths = {0: 6, 1: 15, 2: 8, 3: 10, 4: 8, 5: 8, 6: 8, 7: 6, 8: 8, 9: 10}

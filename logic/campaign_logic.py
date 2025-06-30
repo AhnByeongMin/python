@@ -75,7 +75,7 @@ def process_campaign_files(files) -> Tuple[Optional[pd.DataFrame], Optional[pd.D
                 df = df.dropna(subset=["일반회차 캠페인"])
                 
                 # 캠페인 값이 "캠", "정규", "재분배" 중 하나 이상 포함된 행만 유지
-                df = df[df["일반회차 캠페인"].astype(str).str.contains("캠|정규|재분배", case=False)]
+                df = df[df["일반회차 캠페인"].astype(str).str.contains("캠|정규|재분배|V-|C-|C_|AS-", case=False)]
             
             # 전체 데이터에 추가
             all_data.append(df)

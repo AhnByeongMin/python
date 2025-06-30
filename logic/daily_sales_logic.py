@@ -64,6 +64,45 @@ TOTAL_TARGET = {
               "매출액": sum(item["온라인"]["매출액"] for item in TARGET_DATA.values())}
 }
 
+def remove_invalid_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    유효하지 않은 컬럼명을 가진 열을 제거하는 함수
+    
+    Args:
+        df: 데이터프레임
+        
+    Returns:
+        pd.DataFrame: 정리된 데이터프레임
+    """
+    if df.empty:
+        return df
+    
+    # 제거할 컬럼 목록
+    cols_to_remove = []
+    
+    for col in df.columns:
+        # 1. 컬럼명이 0인 경우 (다양한 형태 고려)
+        if (col == 0 or 
+            col == '0' or 
+            str(col) == '0' or 
+            str(col).strip() == '0'):
+            cols_to_remove.append(col)
+        # 2. 컬럼명이 'Unnamed'로 시작하는 경우
+        elif isinstance(col, str) and col.startswith('Unnamed'):
+            cols_to_remove.append(col)
+        # 3. 컬럼명이 빈 문자열이거나 공백만 있는 경우
+        elif isinstance(col, str) and col.strip() == '':
+            cols_to_remove.append(col)
+        # 4. 컬럼명이 NaN인 경우
+        elif pd.isna(col):
+            cols_to_remove.append(col)
+    
+    # 해당 컬럼들 제거
+    if cols_to_remove:
+        df = df.drop(columns=cols_to_remove, errors='ignore')
+    
+    return df
+
 def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """
     승인매출 엑셀 파일을 처리하는 함수
@@ -78,14 +117,42 @@ def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
         # 파일 포인터 초기화
         file.seek(0)
         
-        # 엑셀 파일 읽기
-        df = pd.read_excel(file, parse_dates=['주문 일자'])
+        # 여러 가능한 시작점에서 데이터 찾기
+        df = None
+        error_messages = []
+        
+        # 시도할 skiprows 값들 (0, 2, 1, 3, 4, 5까지 시도)
+        skip_options = [0, 2, 1, 3, 4, 5]
+        
+        for skip_rows in skip_options:
+            try:
+                file.seek(0)  # 파일 포인터 재설정
+                temp_df = pd.read_excel(file, skiprows=skip_rows)
+                
+                # 유효하지 않은 컬럼 제거
+                temp_df = remove_invalid_columns(temp_df)
+                
+                # 데이터가 충분한지 확인 (최소 3행 이상, 컬럼 3개 이상)
+                if len(temp_df) >= 3 and len(temp_df.columns) >= 3:
+                    print(f"skiprows={skip_rows}에서 데이터 발견: {len(temp_df)}행, {len(temp_df.columns)}컬럼")
+                    print(f"컬럼명: {list(temp_df.columns)[:10]}")
+                    df = temp_df
+                    break
+                else:
+                    error_messages.append(f"skiprows={skip_rows}: 데이터 부족 ({len(temp_df)}행, {len(temp_df.columns)}컬럼)")
+                    
+            except Exception as e:
+                error_messages.append(f"skiprows={skip_rows}: {str(e)}")
+                continue
+        
+        # 데이터를 찾지 못한 경우
+        if df is None:
+            return None, (f"승인매출 파일에서 유효한 데이터를 찾을 수 없습니다.\n"
+                         f"시도한 결과들:\n" + "\n".join(error_messages))
         
         # 필요한 컬럼 확인
         required_columns = [
-            "주문 일자", "판매인입경로", "일반회차 캠페인", "대분류", 
-            "월 렌탈 금액", "약정 기간 값", "총 패키지 할인 회차", 
-            "판매 금액", "선납 렌탈 금액", "매출액"
+            "주문 일자", "판매인입경로", "일반회차 캠페인", "대분류", "매출액"
         ]
         
         # 컬럼명이 비슷한 경우 매핑
@@ -96,16 +163,11 @@ def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
                 
             # 유사한 컬럼명 목록
             similar_cols = {
-                "주문 일자": ["주문일자", "주문날짜", "계약일자", "승인일자"],
-                "판매인입경로": ["판매 인입경로", "인입경로", "영업채널", "영업 채널"],
-                "일반회차 캠페인": ["캠페인", "일반회차캠페인", "회차", "회차 캠페인"],
+                "주문 일자": ["주문일자", "주문날짜", "계약일자", "승인일자", "주문 등록 일자"],
+                "판매인입경로": ["판매 인입경로", "인입경로", "영업채널", "영업 채널", "판매 인입경로"],
+                "일반회차 캠페인": ["캠페인", "일반회차캠페인", "회차", "회차 캠페인", "일반회차 캠페인"],
                 "대분류": ["제품", "품목", "상품", "상품명", "제품명", "품목명", "카테고리"],
-                "월 렌탈 금액": ["월렌탈금액", "렌탈 금액", "렌탈금액", "월 렌탈료"],
-                "약정 기간 값": ["약정기간값", "약정 기간", "약정개월", "약정 개월"],
-                "총 패키지 할인 회차": ["총패키지할인회차", "패키지 할인", "할인 회차", "패키지할인회차"],
-                "판매 금액": ["판매금액", "매출 금액"],
-                "선납 렌탈 금액": ["선납렌탈금액", "선납금액", "선납 금액"],
-                "매출액": ["순매출액", "매출금액", "매출", "net_sales", "net_revenue"]
+                "매출액": ["순매출액", "매출금액", "매출", "net_sales", "net_revenue", "매출 금액"]
             }
             
             if req_col in similar_cols:
@@ -119,52 +181,22 @@ def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
         # 컬럼명 변경
         if column_mapping:
             df = df.rename(columns=column_mapping)
+            print(f"컬럼 매핑 적용: {column_mapping}")
         
-        # 필요한 컬럼 확인 재검사 (매출액 컬럼 없으면 VAT 계산 필요)
-        missing_columns = [col for col in required_columns[:-1] if col not in df.columns]  # 매출액은 필수가 아니어도 됨
+        # 필요한 컬럼 확인 재검사
+        missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
-            return None, f"승인매출 파일에 필요한 열이 없습니다: {', '.join(missing_columns)}"
+            # 현재 컬럼 목록도 함께 표시
+            available_cols = list(df.columns)[:10]  # 처음 10개만 표시
+            return None, (f"승인매출 파일에 필요한 열이 없습니다: {', '.join(missing_columns)}\n"
+                         f"현재 파일의 컬럼: {', '.join(available_cols)}{'...' if len(df.columns) > 10 else ''}\n"
+                         f"총 {len(df)}행, {len(df.columns)}컬럼의 데이터가 있습니다.")
         
-        # 숫자형 변환 (대분류, 판매인입경로, 일반회차 캠페인 제외)
-        numeric_columns = [
-            "월 렌탈 금액", "약정 기간 값", "총 패키지 할인 회차", 
-            "판매 금액", "선납 렌탈 금액"
-        ]
-        
+        # 숫자형 변환 (매출액 컬럼만)
         if "매출액" in df.columns:
-            numeric_columns.append("매출액")
+            df["매출액"] = pd.to_numeric(df["매출액"], errors='coerce').fillna(0)
         
-        for col in numeric_columns:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        
-        # 총 패키지 할인 회차 데이터 정제
-        # 39, 59, 60 값은 0으로 대체 (특정 비즈니스 규칙)
-        if "총 패키지 할인 회차" in df.columns:
-            df['총 패키지 할인 회차'] = df['총 패키지 할인 회차'].replace([39, 59, 60], 0)
-        
-        # 매출금액 계산 공식 (ERP에서 제공한 매출액 컬럼이 없는 경우에만 계산)
-        if "매출액" not in df.columns:
-            # 일시불 판매 추가 할인 금액 컬럼이 있는지 확인
-            has_discount_column = "일시불 판매 추가 할인 금액" in df.columns
-            
-            # 매출금액 계산
-            if has_discount_column:
-                df['매출금액'] = (df['월 렌탈 금액'] * (df['약정 기간 값'] - df['총 패키지 할인 회차']) + 
-                              df['판매 금액'] - df['일시불 판매 추가 할인 금액'] + df['선납 렌탈 금액'])
-            else:
-                df['매출금액'] = (df['월 렌탈 금액'] * (df['약정 기간 값'] - df['총 패키지 할인 회차']) + 
-                              df['판매 금액'] + df['선납 렌탈 금액'])
-            
-            # VAT 세율 설정 - 10%
-            vat_rate = 0.1
-            
-            # VAT 제외 매출금액 계산
-            df['매출액'] = round(df['매출금액'] / (1 + vat_rate), 0)
-        
-        # 매출금액(VAT제외) 컬럼도 호환성을 위해 유지 (매출액 값으로 복사)
-        df['매출금액(VAT제외)'] = df['매출액']
-        
+        print(f"승인매출 파일 처리 완료: {len(df)}행, {len(df.columns)}컬럼")
         return df, None
         
     except Exception as e:
@@ -184,13 +216,43 @@ def process_installation_file(file) -> Tuple[Optional[pd.DataFrame], Optional[st
         # 파일 포인터 초기화
         file.seek(0)
         
-        # 엑셀 파일 읽기 (날짜 관련 컬럼을 날짜 형식으로 변환)
-        df = pd.read_excel(file)
+        # 여러 가능한 시작점에서 데이터 찾기
+        df = None
+        error_messages = []
+        
+        # 시도할 skiprows 값들 (0, 2, 1, 3, 4, 5까지 시도)
+        skip_options = [0, 2, 1, 3, 4, 5]
+        
+        for skip_rows in skip_options:
+            try:
+                file.seek(0)  # 파일 포인터 재설정
+                temp_df = pd.read_excel(file, skiprows=skip_rows)
+                
+                # 유효하지 않은 컬럼 제거
+                temp_df = remove_invalid_columns(temp_df)
+                
+                # 데이터가 충분한지 확인 (최소 3행 이상, 컬럼 3개 이상)
+                if len(temp_df) >= 3 and len(temp_df.columns) >= 3:
+                    print(f"설치매출 skiprows={skip_rows}에서 데이터 발견: {len(temp_df)}행, {len(temp_df.columns)}컬럼")
+                    print(f"컬럼명: {list(temp_df.columns)[:10]}")
+                    df = temp_df
+                    break
+                else:
+                    error_messages.append(f"skiprows={skip_rows}: 데이터 부족 ({len(temp_df)}행, {len(temp_df.columns)}컬럼)")
+                    
+            except Exception as e:
+                error_messages.append(f"skiprows={skip_rows}: {str(e)}")
+                continue
+        
+        # 데이터를 찾지 못한 경우
+        if df is None:
+            return None, (f"설치매출 파일에서 유효한 데이터를 찾을 수 없습니다.\n"
+                         f"시도한 결과들:\n" + "\n".join(error_messages))
         
         # 날짜 컬럼 추정 (여러 가능한 이름)
         date_column_candidates = [
             "설치 일자", "설치일자", "주문 일자", "주문일자", 
-            "계약 일자", "계약일자", "완료 일자", "완료일자"
+            "계약 일자", "계약일자", "완료 일자", "완료일자", "주문 등록 일자"
         ]
         
         date_column = None
@@ -216,9 +278,7 @@ def process_installation_file(file) -> Tuple[Optional[pd.DataFrame], Optional[st
         
         # 필요한 컬럼 확인
         required_columns = [
-            "판매인입경로", "일반회차 캠페인", "대분류", 
-            "월 렌탈 금액", "약정 기간 값", "총 패키지 할인 회차", 
-            "판매 금액", "선납 렌탈 금액"
+            "판매인입경로", "일반회차 캠페인", "대분류", "매출액"
         ]
         
         # 컬럼명이 비슷한 경우 매핑
@@ -229,15 +289,10 @@ def process_installation_file(file) -> Tuple[Optional[pd.DataFrame], Optional[st
                 
             # 유사한 컬럼명 목록
             similar_cols = {
-                "판매인입경로": ["판매 인입경로", "인입경로", "영업채널", "영업 채널"],
-                "일반회차 캠페인": ["캠페인", "일반회차캠페인", "회차", "회차 캠페인"],
+                "판매인입경로": ["판매 인입경로", "인입경로", "영업채널", "영업 채널", "판매 인입경로"],
+                "일반회차 캠페인": ["캠페인", "일반회차캠페인", "회차", "회차 캠페인", "일반회차 캠페인"],
                 "대분류": ["제품", "품목", "상품", "상품명", "제품명", "품목명", "카테고리"],
-                "월 렌탈 금액": ["월렌탈금액", "렌탈 금액", "렌탈금액", "월 렌탈료"],
-                "약정 기간 값": ["약정기간값", "약정 기간", "약정개월", "약정 개월"],
-                "총 패키지 할인 회차": ["총패키지할인회차", "패키지 할인", "할인 회차", "패키지할인회차"],
-                "판매 금액": ["판매금액", "매출 금액"],
-                "선납 렌탈 금액": ["선납렌탈금액", "선납금액", "선납 금액"],
-                "매출액": ["순매출액", "매출금액", "매출", "net_sales", "net_revenue"],
+                "매출액": ["순매출액", "매출금액", "매출", "net_sales", "net_revenue", "매출 금액"],
                 "품목명": ["상품명", "제품명", "상품 명", "제품 명", "품목 명"]
             }
             
@@ -252,56 +307,26 @@ def process_installation_file(file) -> Tuple[Optional[pd.DataFrame], Optional[st
         # 컬럼명 변경
         if column_mapping:
             df = df.rename(columns=column_mapping)
+            print(f"설치매출 컬럼 매핑 적용: {column_mapping}")
         
         # 필요한 컬럼 확인 재검사
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
-            return None, f"설치매출 파일에 필요한 열이 없습니다: {', '.join(missing_columns)}"
+            # 현재 컬럼 목록도 함께 표시
+            available_cols = list(df.columns)[:10]  # 처음 10개만 표시
+            return None, (f"설치매출 파일에 필요한 열이 없습니다: {', '.join(missing_columns)}\n"
+                         f"현재 파일의 컬럼: {', '.join(available_cols)}{'...' if len(df.columns) > 10 else ''}\n"
+                         f"총 {len(df)}행, {len(df.columns)}컬럼의 데이터가 있습니다.")
         
         # 날짜 컬럼 이름을 "주문 일자"로 표준화
         if date_column and date_column != "주문 일자":
             df["주문 일자"] = df[date_column]
         
-        # 숫자형 변환 (대분류, 판매인입경로, 일반회차 캠페인 제외)
-        numeric_columns = [
-            "월 렌탈 금액", "약정 기간 값", "총 패키지 할인 회차", 
-            "판매 금액", "선납 렌탈 금액"
-        ]
-        
+        # 숫자형 변환 (매출액 컬럼만)
         if "매출액" in df.columns:
-            numeric_columns.append("매출액")
+            df["매출액"] = pd.to_numeric(df["매출액"], errors='coerce').fillna(0)
         
-        for col in numeric_columns:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        
-        # 총 패키지 할인 회차 데이터 정제
-        # 39, 59, 60 값은 0으로 대체 (특정 비즈니스 규칙)
-        if "총 패키지 할인 회차" in df.columns:
-            df['총 패키지 할인 회차'] = df['총 패키지 할인 회차'].replace([39, 59, 60], 0)
-        
-        # 매출금액 계산 공식 (ERP에서 제공한 매출액 컬럼이 없는 경우에만 계산)
-        if "매출액" not in df.columns:
-            # 일시불 판매 추가 할인 금액 컬럼이 있는지 확인
-            has_discount_column = "일시불 판매 추가 할인 금액" in df.columns
-            
-            # 매출금액 계산
-            if has_discount_column:
-                df['매출금액'] = (df['월 렌탈 금액'] * (df['약정 기간 값'] - df['총 패키지 할인 회차']) + 
-                              df['판매 금액'] - df['일시불 판매 추가 할인 금액'] + df['선납 렌탈 금액'])
-            else:
-                df['매출금액'] = (df['월 렌탈 금액'] * (df['약정 기간 값'] - df['총 패키지 할인 회차']) + 
-                              df['판매 금액'] + df['선납 렌탈 금액'])
-            
-            # VAT 세율 설정 - 10%
-            vat_rate = 0.1
-            
-            # VAT 제외 매출금액 계산
-            df['매출액'] = round(df['매출금액'] / (1 + vat_rate), 0)
-        
-        # 매출금액(VAT제외) 컬럼도 호환성을 위해 유지 (매출액 값으로 복사)
-        df['매출금액(VAT제외)'] = df['매출액']
-        
+        print(f"설치매출 파일 처리 완료: {len(df)}행, {len(df.columns)}컬럼")
         return df, None
         
     except Exception as e:
@@ -366,7 +391,7 @@ def analyze_installation_by_product_model(installation_df):
     campaign_mask = (
         massage_chair_data['일반회차 캠페인'].astype(str).str.strip() != ""  # ① 공백이 아닌 경우
     ) & (
-        massage_chair_data['일반회차 캠페인'].astype(str).str.contains(r'^C-|^V-|AS-|캠|정규|재분배', case=False, na=False)  # ② C-, V-, 캠, 정규, 재분배 포함
+        massage_chair_data['일반회차 캠페인'].astype(str).str.contains(r'^C|^V|^AS|캠|정규|재분배', case=False, na=False)  # ② C-, V-, 캠, 정규, 재분배 포함
     ) & ~(
         massage_chair_data['일반회차 캠페인'].astype(str).str.startswith('CB-', na=False)  # ③ CB- 제외
     )
@@ -616,16 +641,35 @@ def analyze_approval_data_by_product(df: pd.DataFrame) -> pd.DataFrame:
     # 제품 종류 정의
     products = ["안마의자", "라클라우드", "정수기"]
     
-    # 매출 컬럼 결정 (매출액이 있으면 그것을 사용, 없으면 매출금액(VAT제외) 사용)
-    revenue_column = "매출액" if "매출액" in df.columns else "매출금액(VAT제외)"
+    # 매출 컬럼 사용 (매출액만 사용)
+    revenue_column = "매출액"
+    
+    # 매출액 컬럼이 없는 경우 오류 반환
+    if revenue_column not in df.columns:
+        return pd.DataFrame({
+            "제품": ["안마의자", "라클라우드", "정수기", "총합계"],
+            "목표_건수": [0, 0, 0, 0],
+            "목표_매출액": [0, 0, 0, 0],
+            "총승인(본사/연계)_건수": [0, 0, 0, 0],
+            "총승인(본사/연계)_매출액": [0, 0, 0, 0],
+            "달성률_건수": [0, 0, 0, 0],
+            "달성률_매출액": [0, 0, 0, 0],
+            "본사직접승인_건수": [0, 0, 0, 0],
+            "본사직접승인_매출액": [0, 0, 0, 0],
+            "연계승인_건수": [0, 0, 0, 0],
+            "연계승인_매출액": [0, 0, 0, 0],
+            "온라인_건수": [0, 0, 0, 0],
+            "온라인_매출액": [0, 0, 0, 0],
+            "온라인달성률_매출액": [0, 0, 0, 0]
+        })
     
     # 필터링 조건 정의
     # 1. 본사/연계합계: "CB-"로 시작하는 캠페인 제외, "V-", "C-"로 시작하거나 "캠", "정규", "분배"를 포함하는 캠페인
     total_mask = df['일반회차 캠페인'].astype(str).str.match(r'^(?!CB-).*$')
     campaign_mask = (
-        df['일반회차 캠페인'].astype(str).str.startswith('V-') | 
-        df['일반회차 캠페인'].astype(str).str.startswith('C-') |
-        df['일반회차 캠페인'].astype(str).str.startswith('AS-') | 
+        df['일반회차 캠페인'].astype(str).str.startswith('V') | 
+        df['일반회차 캠페인'].astype(str).str.startswith('C') |
+        df['일반회차 캠페인'].astype(str).str.startswith('AS') | 
         df['일반회차 캠페인'].astype(str).str.contains('캠') | 
         df['일반회차 캠페인'].astype(str).str.contains('정규') | 
         df['일반회차 캠페인'].astype(str).str.contains('분배')
@@ -811,7 +855,7 @@ def analyze_installation_by_product_model(installation_df):
     campaign_mask = (
         massage_chair_data['일반회차 캠페인'].astype(str).str.strip() != ""  # ① 공백이 아닌 경우
     ) & (
-        massage_chair_data['일반회차 캠페인'].astype(str).str.contains(r'^C-|^V-|캠|정규|재분배', case=False, na=False)  # ② C-, V-, 캠, 정규, 재분배 포함
+        massage_chair_data['일반회차 캠페인'].astype(str).str.contains(r'^C|^V|^AS|캠|정규|재분배', case=False, na=False)  # ② C-, V-, 캠, 정규, 재분배 포함
     ) & ~(
         massage_chair_data['일반회차 캠페인'].astype(str).str.startswith('CB-', na=False)  # ③ CB- 제외
     )
@@ -1225,15 +1269,8 @@ def create_excel_report(
             # 원본 데이터에서 필요한 컬럼만 추출
             approval_data = original_approval_df.copy()
             
-            # 컬럼명이 없는 열(Unnamed로 시작하는 열) 확인하여 제거
-            unnamed_cols = []
-            for col in approval_data.columns:
-                if isinstance(col, str) and col.startswith('Unnamed'):
-                    unnamed_cols.append(col)
-            
-            # 컬럼명이 없는 열만 제거
-            if unnamed_cols:
-                approval_data.drop(unnamed_cols, axis=1, inplace=True)
+            # 유효하지 않은 컬럼 제거
+            approval_data = remove_invalid_columns(approval_data)
                 
             # 특수 컬럼 타입 식별
             mobile_columns = []  # 모바일 번호 컬럼
@@ -1355,15 +1392,8 @@ def create_excel_report(
             # 원본 데이터에서 필요한 컬럼만 추출
             installation_data = original_installation_df.copy()
             
-            # 컬럼명이 없는 열(Unnamed로 시작하는 열) 확인하여 제거
-            unnamed_cols = []
-            for col in installation_data.columns:
-                if isinstance(col, str) and col.startswith('Unnamed'):
-                    unnamed_cols.append(col)
-            
-            # 컬럼명이 없는 열만 제거
-            if unnamed_cols:
-                installation_data.drop(unnamed_cols, axis=1, inplace=True)
+            # 유효하지 않은 컬럼 제거
+            installation_data = remove_invalid_columns(installation_data)
                 
             # 특수 컬럼 타입 식별
             mobile_columns = []  # 모바일 번호 컬럼

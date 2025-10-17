@@ -1,9 +1,11 @@
 {
   "type": "lottery",
   "data": {
-    "안마의자": 1,
-    "라클라우드": 1,
-    "정수기": 1
+    "안마의자": 3,
+    "라클라우드": 2,
+    "정수기": 1,
+    "더케어": 1,
+    "멤버십": 1
   },
   "lottery_method": "product_weight",
   "lottery_count_config": [],
@@ -17,9 +19,9 @@
     "include_services": false,
     "direct_only": true,
     "criteria": [
-      "추첨권"
+      "승인액"
     ],
-    "min_condition": 1,
+    "min_condition": 7,
     "include_all_consultants": true,
     "date_range_option": "사용자 정의"
   }

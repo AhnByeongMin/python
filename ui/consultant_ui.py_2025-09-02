@@ -168,18 +168,14 @@ def generate_compact_html_table(df: pd.DataFrame, is_previous_day: bool = False)
         # CRM 요약인지 확인
         is_summary = row['상담사'] == '총합/평균'
         row_class = 'summary-row' if is_summary else ''
-
+        
         html += f'<tr class="{row_class}">'
         # 순위 부여
         rank = "총합/평균" if is_summary else row_num
         html += f'<td>{rank}</td>'
-
-        # 상담사 이름 (신입에게 병아리 이모지 추가)
-        consultant_name = row["상담사"]
-        new_consultants = ['강하나', '김서윤', '구준모', '이은경', '이보람']
-        if consultant_name in new_consultants:
-            consultant_name = f'🐥 {consultant_name}'
-        html += f'<td>{consultant_name}</td>'
+        
+        # 상담사 이름 (이모지 없이)
+        html += f'<td>{row["상담사"]}</td>'
         
         # 안마의자, 라클라우드, 정수기, 더케어, 멤버십
         for col in ['안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수']:
@@ -243,18 +239,14 @@ def generate_compact_html_table(df: pd.DataFrame, is_previous_day: bool = False)
         # 온라인 요약인지 확인
         is_summary = row['상담사'] == '총합/평균'
         row_class = 'summary-row' if is_summary else ''
-
+        
         html += f'<tr class="{row_class}">'
         # 순위 부여
         rank = "총합/평균" if is_summary else row_num
         html += f'<td>{rank}</td>'
-
-        # 상담사 이름 (신입에게 병아리 이모지 추가)
-        consultant_name = row["상담사"]
-        new_consultants = ['강하나', '김서윤', '구준모', '이은경', '이보람']
-        if consultant_name in new_consultants:
-            consultant_name = f'🐥 {consultant_name}'
-        html += f'<td>{consultant_name}</td>'
+        
+        # 상담사 이름 (이모지 없이)
+        html += f'<td>{row["상담사"]}</td>'
         
         # 안마의자, 라클라우드, 정수기, 더케어, 멤버십
         for col in ['안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수']:

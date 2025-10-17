@@ -27,6 +27,9 @@ from styles.consultant_styles import (
 # 유틸리티 함수 가져오기
 from utils.utils import format_time, get_previous_business_day
 
+# 신입 명단 정의
+NEWBIE_LIST = ['강하나', '구준모', '김서윤', '이보람', '이은경']
+
 def calculate_target_calltime_seconds(current_time=None):
     """
     현재 시간 기준으로 목표 콜타임을 계산합니다.
@@ -107,10 +110,133 @@ def get_consultant_status_emoji(calltime_seconds, target_seconds):
     else :
         return ""
 
+def classify_consultant_by_team(df):
+    """
+    상담사를 팀별로 분류합니다.
     
+    Args:
+        df: 상담원 데이터프레임
+        
+    Returns:
+        tuple: (crm_df, online_df, newbie_df)
+    """
+    # 데이터프레임 복사본 생성
+    df_copy = df.copy()
+    
+    # 신입 명단에 해당하는 상담사들의 조직을 '신입파트'로 변경
+    df_copy.loc[df_copy['상담사'].isin(NEWBIE_LIST), '조직'] = '신입파트'
+    
+    # 팀별로 분리
+    crm_df = df_copy[df_copy['조직'] == 'CRM파트']
+    online_df = df_copy[df_copy['조직'] == '온라인파트']
+    newbie_df = df_copy[df_copy['조직'] == '신입파트']
+    
+    return crm_df, online_df, newbie_df
+
+def generate_team_summary_row(team_df, team_name):
+    """
+    팀별 요약 행을 생성합니다.
+    
+    Args:
+        team_df: 팀 데이터프레임
+        team_name: 팀 이름
+        
+    Returns:
+        dict: 요약 데이터
+    """
+    if len(team_df) == 0:
+        return None
+        
+    summary = {
+        "순위": team_name,
+        "상담사": "총합/평균",
+        "안마의자": team_df["안마의자"].sum(),
+        "라클라우드": team_df["라클라우드"].sum(),
+        "정수기": team_df["정수기"].sum(),
+        "더케어": team_df["더케어"].sum(),
+        "멤버십": team_df["멤버십"].sum(),
+        "건수": team_df["건수"].sum(),
+        "콜건수": round(team_df["콜건수"].mean(), 1),
+        "콜타임": format_time(team_df["콜타임_초"].mean())
+    }
+    return summary
+
+def generate_team_html_rows(team_df, current_target_seconds, total_target_seconds, team_name):
+    """
+    팀별 HTML 행들을 생성합니다.
+    
+    Args:
+        team_df: 팀 데이터프레임
+        current_target_seconds: 현재 시간 기준 목표 콜타임
+        total_target_seconds: 전체 목표 콜타임
+        team_name: 팀 이름
+        
+    Returns:
+        str: HTML 행들
+    """
+    html = ""
+    
+    if len(team_df) == 0:
+        return html
+    
+    # 팀 데이터 정렬
+    sorted_team_df = team_df.sort_values(by=['건수', '콜타임_초'], ascending=[False, False])
+    row_num = 1
+    
+    # 개별 상담사 행 생성
+    for i, row in sorted_team_df.iterrows():
+        is_summary = row['상담사'] == '총합/평균'
+        row_class = 'summary-row' if is_summary else ''
+        
+        html += f'<tr class="{row_class}">'
+        # 순위 부여
+        rank = "총합/평균" if is_summary else row_num
+        html += f'<td>{rank}</td>'
+        
+        # 상담사 이름
+        html += f'<td>{row["상담사"]}</td>'
+        
+        # 제품별 건수
+        for col in ['안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수']:
+            value = row[col]
+            value = '-' if value == 0 else value
+            html += f'<td>{value}</td>'
+        
+        # 콜수
+        html += f'<td>{row["콜건수"]}</td>'
+        
+        # 콜타임 (프로그레스 바 포함)
+        if not is_summary:
+            percentage = min(100, (row["콜타임_초"] / total_target_seconds) * 100)
+            status_emoji = get_consultant_status_emoji(row["콜타임_초"], current_target_seconds)
+            html += f'<td class="calltime-cell">{row["콜타임"]} {status_emoji}<div class="progress-bar-bg" style="width: {percentage}%;"></div></td>'
+        else:
+            html += f'<td>{row["콜타임"]}</td>'
+        
+        html += '</tr>'
+        
+        if not is_summary:
+            row_num += 1
+    
+    # 팀 요약 행 추가
+    summary = generate_team_summary_row(team_df, team_name)
+    if summary:
+        html += '<tr class="summary-row">'
+        html += f'<td>{summary["순위"]}</td>'
+        html += f'<td>{summary["상담사"]}</td>'
+        for col in ['안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수']:
+            value = summary[col]
+            value = '-' if value == 0 else value
+            html += f'<td>{value}</td>'
+        html += f'<td>{summary["콜건수"]}</td>'
+        html += f'<td>{summary["콜타임"]}</td>'
+        html += '</tr>'
+    
+    return html
+
 def generate_compact_html_table(df: pd.DataFrame, is_previous_day: bool = False):
     """
-    컴팩트한 HTML 테이블 생성 함수 - 콜타임 프로그레스 바 추가 버전
+    컴팩트한 HTML 테이블 생성 함수 - 신입파트 추가 버전
     
     Args:
         df: 상담원 실적 데이터프레임
@@ -126,17 +252,18 @@ def generate_compact_html_table(df: pd.DataFrame, is_previous_day: bool = False)
     date_str = f"{current_time.month}월{current_time.day}일({['월','화','수','목','금','토','일'][current_time.weekday()]})"
     time_str = f"{current_time.hour}:{current_time.minute:02d}"
     
-    # 목표 콜타임 계산 - 전체 목표와 현재 시간 기준 목표 모두 계산
+    # 목표 콜타임 계산
     total_target_seconds = 3 * 3600 + 30 * 60  # 3:30:00 = 12600초 (전체 목표)
     
-    # 현재 시간 기준 목표 콜타임 계산
     if is_previous_day:
-        # 전날 데이터를 조회하는 경우 - 전체 목표 시간 사용 (3:30:00)
         current_target_seconds = total_target_seconds
     else:
-        # 당일 데이터를 조회하는 경우 - 현재 시간 기준으로 목표 계산
         current_target_seconds = calculate_target_calltime_seconds(current_time.time())
-       # 테이블 컨테이너 시작
+    
+    # 팀별 분류
+    crm_df, online_df, newbie_df = classify_consultant_by_team(df)
+    
+    # 테이블 컨테이너 시작
     html += '<div class="table-container">'
     html += '<table class="compact-table">'
     
@@ -158,169 +285,23 @@ def generate_compact_html_table(df: pd.DataFrame, is_previous_day: bool = False)
         html += f'<th>{header}</th>'
     html += '</tr></thead>'
     
-    # 본문 데이터 추가
     html += '<tbody>'
     
-    # CRM 파트 먼저 처리
-    crm_df = df[df['조직'] == 'CRM파트'].sort_values(by=['건수', '콜타임_초'], ascending=[False, False])
-    row_num = 1
-    for i, row in crm_df.iterrows():
-        # CRM 요약인지 확인
-        is_summary = row['상담사'] == '총합/평균'
-        row_class = 'summary-row' if is_summary else ''
-
-        html += f'<tr class="{row_class}">'
-        # 순위 부여
-        rank = "총합/평균" if is_summary else row_num
-        html += f'<td>{rank}</td>'
-
-        # 상담사 이름 (신입에게 병아리 이모지 추가)
-        consultant_name = row["상담사"]
-        new_consultants = ['강하나', '김서윤', '구준모', '이은경', '이보람']
-        if consultant_name in new_consultants:
-            consultant_name = f'🐥 {consultant_name}'
-        html += f'<td>{consultant_name}</td>'
-        
-        # 안마의자, 라클라우드, 정수기, 더케어, 멤버십
-        for col in ['안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수']:
-            value = row[col]
-            # 0 값을 '-'로 변환
-            value = '-' if value == 0 else value
-            html += f'<td>{value}</td>'
-        
-        # 콜수
-        html += f'<td>{row["콜건수"]}</td>'
-        
-        # 콜타임 (프로그레스 바 포함) - 이제 이모지도 포함
-        if not is_summary:
-            # 콜타임 초 데이터를 퍼센트로 변환 (최대 100%)
-            percentage = min(100, (row["콜타임_초"] / total_target_seconds) * 100)
-            
-            # 상태 이모지 계산
-            status_emoji = get_consultant_status_emoji(row["콜타임_초"], current_target_seconds)
-            
-            # 콜타임과 이모지를 함께 표시
-            html += f'<td class="calltime-cell">{row["콜타임"]} {status_emoji}<div class="progress-bar-bg" style="width: {percentage}%;"></div></td>'
-        else:
-            # 요약행은 프로그레스 바 없이 표시
-            html += f'<td>{row["콜타임"]}</td>'
-        
-        html += '</tr>'
-        
-        if not is_summary:
-            row_num += 1
-    
-    # CRM 요약 추가
-    crm_summary = {
-        "순위": "CRM팀",
-        "상담사": "총합/평균",
-        "안마의자": crm_df["안마의자"].sum(),
-        "라클라우드": crm_df["라클라우드"].sum(),
-        "정수기": crm_df["정수기"].sum(),
-        "더케어": crm_df["더케어"].sum(),
-        "멤버십": crm_df["멤버십"].sum(),
-        "건수": crm_df["건수"].sum(),
-        "콜건수": round(crm_df["콜건수"].mean(), 1),
-        # 평균 콜타임 초를 계산하고 format_time 함수로 변환
-        "콜타임": format_time(crm_df["콜타임_초"].mean())
-    }
-    
-    html += '<tr class="summary-row">'
-    html += f'<td>{crm_summary["순위"]}</td>'
-    html += f'<td>{crm_summary["상담사"]}</td>'
-    for col in ['안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수']:
-        value = crm_summary[col]
-        value = '-' if value == 0 else value
-        html += f'<td>{value}</td>'
-    html += f'<td>{crm_summary["콜건수"]}</td>'
-    html += f'<td>{crm_summary["콜타임"]}</td>'
-    html += '</tr>'
+    # CRM 파트 처리
+    html += generate_team_html_rows(crm_df, current_target_seconds, total_target_seconds, "CRM팀")
     
     # 온라인 파트 처리
-    online_df = df[df['조직'] == '온라인파트'].sort_values(by=['건수', '콜타임_초'], ascending=[False, False])
-    row_num = 1
-    for i, row in online_df.iterrows():
-        # 온라인 요약인지 확인
-        is_summary = row['상담사'] == '총합/평균'
-        row_class = 'summary-row' if is_summary else ''
-
-        html += f'<tr class="{row_class}">'
-        # 순위 부여
-        rank = "총합/평균" if is_summary else row_num
-        html += f'<td>{rank}</td>'
-
-        # 상담사 이름 (신입에게 병아리 이모지 추가)
-        consultant_name = row["상담사"]
-        new_consultants = ['강하나', '김서윤', '구준모', '이은경', '이보람']
-        if consultant_name in new_consultants:
-            consultant_name = f'🐥 {consultant_name}'
-        html += f'<td>{consultant_name}</td>'
-        
-        # 안마의자, 라클라우드, 정수기, 더케어, 멤버십
-        for col in ['안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수']:
-            value = row[col]
-            # 0 값을 '-'로 변환
-            value = '-' if value == 0 else value
-            html += f'<td>{value}</td>'
-        
-        # 콜수
-        html += f'<td>{row["콜건수"]}</td>'
-        
-        # 콜타임 (프로그레스 바 포함) - 이제 이모지도 포함
-        if not is_summary:
-            # 콜타임 초 데이터를 퍼센트로 변환 (최대 100%)
-            percentage = min(100, (row["콜타임_초"] / total_target_seconds) * 100)
-            
-            # 상태 이모지 계산
-            status_emoji = get_consultant_status_emoji(row["콜타임_초"], current_target_seconds)
-            
-            # 콜타임과 이모지를 함께 표시
-            html += f'<td class="calltime-cell">{row["콜타임"]} {status_emoji}<div class="progress-bar-bg" style="width: {percentage}%;"></div></td>'
-        else:
-            # 요약행은 프로그레스 바 없이 표시
-            html += f'<td>{row["콜타임"]}</td>'
-        
-        html += '</tr>'
-        
-        if not is_summary:
-            row_num += 1
+    html += generate_team_html_rows(online_df, current_target_seconds, total_target_seconds, "온라인팀")
     
-    # 온라인 요약 추가
-    if len(online_df) > 0:
-        online_summary = {
-            "순위": "온라인팀",
-            "상담사": "총합/평균",
-            "안마의자": online_df["안마의자"].sum(),
-            "라클라우드": online_df["라클라우드"].sum(),
-            "정수기": online_df["정수기"].sum(),
-            "더케어": online_df["더케어"].sum(),
-            "멤버십": online_df["멤버십"].sum(),
-            "건수": online_df["건수"].sum(),
-            "콜건수": round(online_df["콜건수"].mean(), 1),
-            # 평균 콜타임 초를 계산하고 format_time 함수로 변환
-            "콜타임": format_time(online_df["콜타임_초"].mean())
-        }
-        
-        html += '<tr class="summary-row">'
-        html += f'<td>{online_summary["순위"]}</td>'
-        html += f'<td>{online_summary["상담사"]}</td>'
-        for col in ['안마의자', '라클라우드', '정수기', '더케어', '멤버십', '건수']:
-            value = online_summary[col]
-            value = '-' if value == 0 else value
-            html += f'<td>{value}</td>'
-        html += f'<td>{online_summary["콜건수"]}</td>'
-        html += f'<td>{online_summary["콜타임"]}</td>'
-        html += '</tr>'
+    # 신입 파트 처리
+    html += generate_team_html_rows(newbie_df, current_target_seconds, total_target_seconds, "신입팀")
     
     html += '</tbody></table>'
     
-    # 요약 텍스트 박스 추가
-    # 팀별 합계 계산
-    crm_df = df[df['조직'] == 'CRM파트']
-    online_df = df[df['조직'] == '온라인파트']
-    
-    crm_total = crm_df['건수'].sum()
+    # 요약 텍스트 박스 생성
+    crm_total = crm_df['건수'].sum() if not crm_df.empty else 0
     online_total = online_df['건수'].sum() if not online_df.empty else 0
+    newbie_total = newbie_df['건수'].sum() if not newbie_df.empty else 0
     
     # 제품별 합계
     total_anma = df['안마의자'].sum()
@@ -328,56 +309,27 @@ def generate_compact_html_table(df: pd.DataFrame, is_previous_day: bool = False)
     total_water = df['정수기'].sum()
     total_thecare = df['더케어'].sum()
     total_membership = df['멤버십'].sum()
+    grand_total = crm_total + online_total + newbie_total
     
-    # 총 건수
-    grand_total = crm_total + online_total
-    
-    # 팀별 제품 내역
-    crm_anma = crm_df['안마의자'].sum()
-    crm_lacloud = crm_df['라클라우드'].sum()
-    crm_water = crm_df['정수기'].sum()
-    crm_thecare = crm_df['더케어'].sum()
-    crm_membership = crm_df['멤버십'].sum()
-    
-    # CRM 팀 상세 정보 생성
-    crm_parts = []
-    if crm_anma > 0:
-        crm_parts.append(f"안마 {crm_anma}건")
-    if crm_lacloud > 0:
-        crm_parts.append(f"라클 {crm_lacloud}건")
-    if crm_water > 0:
-        crm_parts.append(f"정수기 {crm_water}건")
-    if crm_thecare > 0:
-        crm_parts.append(f"더케어 {crm_thecare}건")
-    if crm_membership > 0:
-        crm_parts.append(f"멤버쉽 {crm_membership}건")
-    
-    crm_details = f"({', '.join(crm_parts)})" if crm_parts else "(0건)"
-    
-    # 온라인 팀 상세 정보 생성
-    online_details = "(0건)"
-    if not online_df.empty:
-        online_anma = online_df['안마의자'].sum()
-        online_lacloud = online_df['라클라우드'].sum()
-        online_water = online_df['정수기'].sum()
-        online_thecare = online_df['더케어'].sum()
-        online_membership = online_df['멤버십'].sum()
+    # 팀별 상세 정보 생성
+    def get_team_details(team_df):
+        if team_df.empty:
+            return "(0건)"
         
-        online_parts = []
-        if online_anma > 0:
-            online_parts.append(f"안마 {online_anma}건")
-        if online_lacloud > 0:
-            online_parts.append(f"라클 {online_lacloud}건")
-        if online_water > 0:
-            online_parts.append(f"정수기 {online_water}건")
-        if online_thecare > 0:
-            online_parts.append(f"더케어 {online_thecare}건")
-        if online_membership > 0:
-            online_parts.append(f"멤버쉽 {online_membership}건")
+        parts = []
+        for product, korean_name in [('안마의자', '안마'), ('라클라우드', '라클'), 
+                                   ('정수기', '정수기'), ('더케어', '더케어'), ('멤버십', '멤버쉽')]:
+            count = team_df[product].sum()
+            if count > 0:
+                parts.append(f"{korean_name} {count}건")
         
-        online_details = f"({', '.join(online_parts)})" if online_parts else "(0건)"
+        return f"({', '.join(parts)})" if parts else "(0건)"
     
-    # 요약 텍스트 박스 콘텐츠 준비 - 0건인 항목 생략
+    crm_details = get_team_details(crm_df)
+    online_details = get_team_details(online_df)
+    newbie_details = get_team_details(newbie_df)
+    
+    # 제품별 표시 (0건 제외)
     product_items = []
     if total_anma > 0:
         product_items.append(f'<div class="summary-textbox-product">💆 안마의자 {total_anma}건</div>')
@@ -392,10 +344,10 @@ def generate_compact_html_table(df: pd.DataFrame, is_previous_day: bool = False)
     
     product_html = '\n'.join(product_items)
     
-    # 현재 목표 시간을 시간:분:초 형식으로 변환
+    # 현재 목표 시간 표시
     current_target_time = format_time(current_target_seconds)
     
-    # 요약 텍스트 박스 HTML 직접 작성 (JavaScript 없이 단순하게)
+    # 요약 텍스트 박스 HTML
     html += f'''
     <div class="summary-textbox">
         <div class="summary-textbox-title">{date_str} CRM팀 실적_{time_str}</div>
@@ -404,6 +356,8 @@ def generate_compact_html_table(df: pd.DataFrame, is_previous_day: bool = False)
         <div>{crm_details}</div>
         <div class="summary-textbox-team">💻 온라인팀: 총 {online_total}건</div>
         <div>{online_details}</div>
+        <div class="summary-textbox-team">🌱 신입팀: 총 {newbie_total}건</div>
+        <div>{newbie_details}</div>
         <br>
         {product_html}
         <br>
@@ -411,7 +365,7 @@ def generate_compact_html_table(df: pd.DataFrame, is_previous_day: bool = False)
         <div class="summary-textbox-info">⏱️ 현재 목표 시간: {current_target_time}</div>
         <div class="summary-textbox-legend">
             <span class="legend-item">🚩: 목표 달성</span>
-            <span class="legend-item">⏰: 분발발 필요</span>
+            <span class="legend-item">⏰: 분발필요</span>
         </div>
     </div>
     '''
@@ -421,7 +375,7 @@ def generate_compact_html_table(df: pd.DataFrame, is_previous_day: bool = False)
 
 def generate_compact_sample_html_table() -> str:
     """
-    샘플 HTML 테이블 생성 함수 - 콜타임 프로그레스 바 추가 버전
+    샘플 HTML 테이블 생성 함수 - 신입파트 추가 버전
     
     Returns:
         str: 샘플 HTML 테이블 코드
@@ -441,11 +395,9 @@ def generate_compact_sample_html_table() -> str:
     total_target_seconds = 3 * 3600 + 30 * 60  # 3:30:00 = 12600초 (전체 목표)
     
     if is_previous_day:
-        # 전날 데이터를 조회하는 경우 - 전체 목표 시간 사용
         current_target_seconds = total_target_seconds
         current_target_time = "3:30:00"
     else:
-        # 당일 데이터를 조회하는 경우 - 현재 시간 기준으로 목표 계산
         current_target_seconds = calculate_target_calltime_seconds(current_time.time())
         current_target_time = format_time(current_target_seconds)
     
@@ -460,9 +412,6 @@ def generate_compact_sample_html_table() -> str:
         html += f'<th>{header}</th>'
     html += '</tr></thead>'
     
-    # 목표 시간 (3시간 30분)을 초 단위로 변환
-    target_seconds = 3 * 3600 + 30 * 60  # 3:30:00 = 12600초
-    
     # 각 시간 문자열을 초로 변환하는 함수
     def time_to_seconds(time_str):
         parts = time_str.split(':')
@@ -471,8 +420,9 @@ def generate_compact_sample_html_table() -> str:
             return h * 3600 + m * 60 + s
         return 0
     
-    # CRM 파트 샘플 데이터
     html += '<tbody>'
+    
+    # CRM 파트 샘플 데이터
     crm_data = [
         [1, '이승현', '-', '-', 5, 5, '-', 5, 55, '2:34:18'],
         [2, '유태경', '-', '-', 4, 4, '-', 4, 91, '1:50:16'],
@@ -487,28 +437,17 @@ def generate_compact_sample_html_table() -> str:
         row_class = 'summary-row' if is_summary else ''
         html += f'<tr class="{row_class}">'
         
-        # 처음 열: 순위
-        if is_summary:
-            html += f'<td>{row[0]}</td>'
-        else:
-            html += f'<td>{row[0]}</td>'
-        
-        # 두 번째 열: 상담사 이름 (이모지 제거)
+        html += f'<td>{row[0]}</td>'
         html += f'<td>{row[1]}</td>'
-            
-        # 나머지 필드는 그대로 표시
+        
         for i in range(2, 9):
             html += f'<td>{row[i]}</td>'
         
-        # 콜타임은 프로그레스 바와 함께 표시 (이모지도 함께 표시)
         if not is_summary:
             call_time = row[9]
             seconds = time_to_seconds(call_time)
-            percentage = min(100, (seconds / target_seconds) * 100)
-            
-            # 상태 이모지 계산
+            percentage = min(100, (seconds / total_target_seconds) * 100)
             status_emoji = get_consultant_status_emoji(seconds, current_target_seconds)
-            
             html += f'<td class="calltime-cell">{call_time} {status_emoji}<div class="progress-bar-bg" style="width: {percentage}%;"></div></td>'
         else:
             html += f'<td>{row[9]}</td>'
@@ -527,28 +466,47 @@ def generate_compact_sample_html_table() -> str:
         row_class = 'summary-row' if is_summary else ''
         html += f'<tr class="{row_class}">'
         
-        # 첫 번째 열: 순위
-        if is_summary:
-            html += f'<td>{row[0]}</td>'
-        else:
-            html += f'<td>{row[0]}</td>'
-        
-        # 두 번째 열: 상담사 이름 (이모지 제거)
+        html += f'<td>{row[0]}</td>'
         html += f'<td>{row[1]}</td>'
-            
-        # 나머지 필드는 그대로 표시
+        
         for i in range(2, 9):
             html += f'<td>{row[i]}</td>'
         
-        # 콜타임은 프로그레스 바와 함께 표시 (이모지도 함께 표시)
         if not is_summary:
             call_time = row[9]
             seconds = time_to_seconds(call_time)
-            percentage = min(100, (seconds / target_seconds) * 100)
-            
-            # 상태 이모지 계산
+            percentage = min(100, (seconds / total_target_seconds) * 100)
             status_emoji = get_consultant_status_emoji(seconds, current_target_seconds)
-            
+            html += f'<td class="calltime-cell">{call_time} {status_emoji}<div class="progress-bar-bg" style="width: {percentage}%;"></div></td>'
+        else:
+            html += f'<td>{row[9]}</td>'
+        
+        html += '</tr>'
+    
+    # 신입 파트 샘플 데이터
+    newbie_data = [
+        [1, '강하나', '-', '-', 2, '-', '-', 2, 45, '1:30:25'],
+        [2, '구준모', '-', '-', 1, 1, '-', 2, 38, '1:15:30'],
+        [3, '김서윤', '-', '-', 1, '-', '-', 1, 42, '1:05:15'],
+        ['신입팀', '총합/평균', '-', '-', 4, 1, '-', 5, 42, '1:17:03']
+    ]
+    
+    for row in newbie_data:
+        is_summary = row[0] == '신입팀'
+        row_class = 'summary-row' if is_summary else ''
+        html += f'<tr class="{row_class}">'
+        
+        html += f'<td>{row[0]}</td>'
+        html += f'<td>{row[1]}</td>'
+        
+        for i in range(2, 9):
+            html += f'<td>{row[i]}</td>'
+        
+        if not is_summary:
+            call_time = row[9]
+            seconds = time_to_seconds(call_time)
+            percentage = min(100, (seconds / total_target_seconds) * 100)
+            status_emoji = get_consultant_status_emoji(seconds, current_target_seconds)
             html += f'<td class="calltime-cell">{call_time} {status_emoji}<div class="progress-bar-bg" style="width: {percentage}%;"></div></td>'
         else:
             html += f'<td>{row[9]}</td>'
@@ -566,14 +524,16 @@ def generate_compact_sample_html_table() -> str:
         <div>(안마 1건, 라클 3건, 정수기 24건, 더케어 1건, 멤버쉽 1건)</div>
         <div class="summary-textbox-team">💻 온라인팀: 총 9건</div>
         <div>(안마 5건, 라클 3건, 정수기 1건)</div>
+        <div class="summary-textbox-team">🌱 신입팀: 총 5건</div>
+        <div>(정수기 4건, 더케어 1건)</div>
         <br>
         <div class="summary-textbox-product">💆 안마의자 6건</div>
         <div class="summary-textbox-product">🛏️ 라클라우드 6건</div>
-        <div class="summary-textbox-product">💧 정수기 25건</div>
-        <div class="summary-textbox-product">🛠️ 더케어 1건</div>
+        <div class="summary-textbox-product">💧 정수기 29건</div>
+        <div class="summary-textbox-product">🛠️ 더케어 2건</div>
         <div class="summary-textbox-product">🔖 멤버쉽 1건</div>
         <br>
-        <div class="summary-textbox-total">📊 총 건수 39건</div>
+        <div class="summary-textbox-total">📊 총 건수 44건</div>
         <div class="summary-textbox-info">⏱️ 현재 목표 시간: {current_target_time}</div>
         <div class="summary-textbox-legend">
             <span class="legend-item">🚩: 목표 달성</span>
@@ -588,9 +548,7 @@ def generate_compact_sample_html_table() -> str:
 
 def create_compact_visualization(performance_df: pd.DataFrame):
     """
-    팀별 비교 시각화를 위한 컴팩트한 차트 생성
-    빈 공간 없이 막대가 연속적으로 표시되는 방식
-    배경 및 그리드 스타일 개선
+    팀별 비교 시각화를 위한 컴팩트한 차트 생성 - 신입파트 추가 버전
     
     Args:
         performance_df: 상담원 실적 데이터프레임
@@ -602,58 +560,77 @@ def create_compact_visualization(performance_df: pd.DataFrame):
     import pandas as pd
     import plotly.express as px
     
-    # 데이터 준비 - 팀별 요약
-    team_summary = performance_df.groupby("조직").agg(
-        안마의자=("안마의자", "sum"),
-        라클라우드=("라클라우드", "sum"),
-        정수기=("정수기", "sum"),
-        더케어=("더케어", "sum"),
-        멤버십=("멤버십", "sum"),
-        총건수=("건수", "sum")
-    ).reset_index()
+    # 팀별 분류
+    crm_df, online_df, newbie_df = classify_consultant_by_team(performance_df)
     
-    # 색상 설정 - 더 선명한 색상으로 변경
+    # 팀별 요약 데이터 생성
+    team_summary_data = []
+    
+    # CRM팀 요약
+    if not crm_df.empty:
+        team_summary_data.append({
+            "조직": "CRM팀",
+            "안마의자": crm_df["안마의자"].sum(),
+            "라클라우드": crm_df["라클라우드"].sum(),
+            "정수기": crm_df["정수기"].sum(),
+            "더케어": crm_df["더케어"].sum(),
+            "멤버십": crm_df["멤버십"].sum(),
+            "총건수": crm_df["건수"].sum()
+        })
+    
+    # 온라인팀 요약
+    if not online_df.empty:
+        team_summary_data.append({
+            "조직": "온라인팀",
+            "안마의자": online_df["안마의자"].sum(),
+            "라클라우드": online_df["라클라우드"].sum(),
+            "정수기": online_df["정수기"].sum(),
+            "더케어": online_df["더케어"].sum(),
+            "멤버십": online_df["멤버십"].sum(),
+            "총건수": online_df["건수"].sum()
+        })
+    
+    # 신입팀 요약
+    if not newbie_df.empty:
+        team_summary_data.append({
+            "조직": "신입팀",
+            "안마의자": newbie_df["안마의자"].sum(),
+            "라클라우드": newbie_df["라클라우드"].sum(),
+            "정수기": newbie_df["정수기"].sum(),
+            "더케어": newbie_df["더케어"].sum(),
+            "멤버십": newbie_df["멤버십"].sum(),
+            "총건수": newbie_df["건수"].sum()
+        })
+    
+    team_summary = pd.DataFrame(team_summary_data)
+    
+    # 색상 설정
     colors = {
         "안마의자": "#66c2a5",
         "라클라우드": "#fcfc99",
         "정수기": "#8da0cb",
         "더케어": "#fc8d62",
         "멤버십": "#80b1d3",
-        "총건수": "#4472C4"  # 더 진한 파란색으로 총건수 강조
+        "총건수": "#4472C4"
     }
     
-    # 팀별 데이터 정리
-    team_data = {}
-    for team in team_summary["조직"].unique():
-        team_rows = team_summary[team_summary["조직"] == team].iloc[0]
-        
-        # 0건이 아닌 제품만 필터링
-        non_zero_products = {}
-        for product in ["안마의자", "라클라우드", "정수기", "더케어", "멤버십"]:
-            if team_rows[product] > 0:
-                non_zero_products[product] = team_rows[product]
-        
-        # 총건수 항상 포함
-        non_zero_products["총건수"] = team_rows["총건수"]
-        
-        team_data[team] = non_zero_products
-    
-    # 기본 그래프 생성 - Plotly Express 사용
-    # 0건이 아닌 제품만 포함하는 데이터프레임 생성
+    # 팀별 데이터 정리 (0건 제외)
     plot_data = []
     
-    for team, products in team_data.items():
-        for product, value in products.items():
-            plot_data.append({
-                "팀": team,
-                "제품": product,
-                "건수": value
-            })
+    for _, team_row in team_summary.iterrows():
+        team_name = team_row["조직"]
+        for product in ["안마의자", "라클라우드", "정수기", "더케어", "멤버십", "총건수"]:
+            value = team_row[product]
+            if product == "총건수" or value > 0:  # 총건수는 항상 포함, 나머지는 0건 제외
+                plot_data.append({
+                    "팀": team_name,
+                    "제품": product,
+                    "건수": value
+                })
     
-    # 데이터프레임 생성
     plot_df = pd.DataFrame(plot_data)
     
-    # 제품 유형 순서 지정 (총건수가 맨 마지막에 오도록)
+    # 제품 유형 순서 지정
     category_order = ["안마의자", "라클라우드", "정수기", "더케어", "멤버십", "총건수"]
     
     # Plotly Express로 그래프 생성
@@ -666,7 +643,7 @@ def create_compact_visualization(performance_df: pd.DataFrame):
         color_discrete_map=colors,
         category_orders={"제품": category_order},
         text="건수",
-        title="팀별 제품 유형 및 총건수 비교"
+        title="팀별 제품 유형 및 총건수 비교 (신입팀 포함)"
     )
     
     # 총건수 막대 강조
@@ -675,13 +652,10 @@ def create_compact_visualization(performance_df: pd.DataFrame):
             trace.marker.line.width = 1.5
             trace.marker.line.color = "black"
     
-    # 레이아웃 설정 - 그리드 및 배경 개선
+    # 레이아웃 설정
     fig.update_layout(
-        # 높이 및 여백 설정
         height=350,
         margin=dict(l=40, r=40, t=60, b=40),
-        
-        # 범례 설정
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -690,36 +664,30 @@ def create_compact_visualization(performance_df: pd.DataFrame):
             x=1,
             font=dict(size=10)
         ),
-        
-        # 폰트 설정
         font=dict(size=10),
-        
-        # 배경 설정
-        plot_bgcolor="rgba(240, 240, 240, 0.2)",  # 연한 회색 배경
-        paper_bgcolor="rgba(0, 0, 0, 0)",  # 투명 배경
-        
-        # 그리드 설정
+        plot_bgcolor="rgba(240, 240, 240, 0.2)",
+        paper_bgcolor="rgba(0, 0, 0, 0)",
         yaxis=dict(
             showgrid=True,
             gridwidth=1,
-            gridcolor="rgba(211, 211, 211, 0.3)"  # 연한 회색 그리드
+            gridcolor="rgba(211, 211, 211, 0.3)"
         ),
         xaxis=dict(
-            showgrid=False  # x축 그리드 미표시
+            showgrid=False
         )
     )
     
     # 스타일 개선
     fig.update_traces(
-        textposition='outside',  # 텍스트 위치
-        textfont_size=9,         # 텍스트 크기
-        width=0.7                # 막대 너비 조정
+        textposition='outside',
+        textfont_size=9,
+        width=0.7
     )
     
     # 빈 공간 최소화
     fig.update_layout(
-        bargap=0.2,        # 팀 사이 간격
-        bargroupgap=0.02   # 막대 간 간격
+        bargap=0.2,
+        bargroupgap=0.02
     )
     
     return fig
@@ -731,7 +699,7 @@ def show():
     st.title("👥상담원 실적 현황")
     st.markdown(CONSULTANT_DESCRIPTION, unsafe_allow_html=True)
     
-    # 추가 스타일 적용 - 범례 스타일 (라이트모드/다크모드 모두 시인성 개선 및 간격 조정)
+    # 추가 스타일 적용
     st.markdown("""
     <style>
     .summary-textbox-info {
@@ -755,7 +723,6 @@ def show():
         font-weight: 500;
         box-shadow: 0 1px 2px rgba(0,0,0,0.1);
     }
-    /* 다크 모드에서의 범례 스타일 개선 */
     .dark-theme .summary-textbox-info {
         color: #4f96e6;
     }
@@ -764,7 +731,6 @@ def show():
         color: #ffffff;
     }
     
-    /* 날짜 아래의 간단한 범례 스타일 (라이트모드/다크모드 모두 개선) */
     .simple-legend {
         text-align: center;
         margin-top: 2px;
@@ -837,29 +803,24 @@ def show():
                 st.session_state.performance_df = performance_df
                 st.session_state.filtered_data = filtered_data
                 
-                # 결과 표시 (압축된 버전)
+                # 결과 표시
                 st.markdown('<h3>상담원 실적 현황</h3>', unsafe_allow_html=True)
                 
-                # 필터링된 데이터 정보 표시 (추가됨)
+                # 필터링된 데이터 정보 표시
                 if filtered_data is not None:
                     st.write(f"필터링된 원본 데이터: {len(filtered_data)}개의 행, 판매채널이 '본사' 또는 '온라인'인 데이터만 포함")
 
                 # 현재 시간 가져오기
                 current_time = datetime.now()
-                # 오전 10시 30분 기준으로 표시 방식 결정
                 cutoff_time = current_time.replace(hour=10, minute=30, second=0, microsecond=0)
 
                 # 목표 시간 및 이모지 기준 설정
                 if current_time < cutoff_time:
-                    # 10시 30분 이전 - 전체 목표 시간 사용 (3:30:00)
                     is_previous_day = True
-                    current_target_time = "3:30:00"  # 고정된 문자열로 표시
-                    
-                    # 이전 영업일 구하기 (공휴일 & 주말 제외)
+                    current_target_time = "3:30:00"
                     prev_date = get_previous_business_day(current_time)
                     date_display = f"★전자계약 제외★ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {prev_date.year}년 {prev_date.month}월 {prev_date.day}일 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 전체집계"
                 else:
-                    # 10시 30분 이후 - 현재 시간 기준으로 목표 계산
                     is_previous_day = False
                     current_target_seconds = calculate_target_calltime_seconds(current_time.time())
                     current_target_time = format_time(current_target_seconds)
@@ -868,20 +829,21 @@ def show():
                 # 상태 표시
                 st.markdown(f'<div class="status-container"><div class="status-chip success">분석 완료</div><div class="timestamp">{current_time.strftime("%Y년 %m월 %d일 %H시 %M분")} 기준 | 현재 목표 콜타임: {current_target_time}</div></div>', unsafe_allow_html=True)
 
-                # 데이터 정보 표시
-                st.write(f"총 {len(performance_df)}명의 상담원 실적이 분석되었습니다.")
+                # 데이터 정보 표시 (신입 포함)
+                crm_df, online_df, newbie_df = classify_consultant_by_team(performance_df)
+                st.write(f"총 {len(performance_df)}명의 상담원 실적이 분석되었습니다. (CRM: {len(crm_df)}명, 온라인: {len(online_df)}명, 신입: {len(newbie_df)}명)")
 
                 # 날짜 표시
                 st.markdown(DATE_DISPLAY_STYLE.format(date_display=date_display), unsafe_allow_html=True)
                 
-                # 범례를 날짜 바로 아래에 간단하게 추가 - 간격 축소 및 양쪽 모드 시인성 개선
+                # 범례 표시
                 st.markdown(f'<div class="simple-legend">⏱️ 목표시간: {current_target_time} | 🚩:달성 | ⏰:분발필요</div>', unsafe_allow_html=True)
 
-                # 컴팩트 HTML 테이블 생성 및 표시 - is_previous_day 파라미터 전달
+                # 컴팩트 HTML 테이블 생성 및 표시
                 html_table = generate_compact_html_table(performance_df, is_previous_day)
                 st.markdown(html_table, unsafe_allow_html=True)
                 
-                # 시각화 섹션 - 접을 수 있게 수정
+                # 시각화 섹션
                 with st.expander("시각화 보기", expanded=False):
                     st.plotly_chart(create_compact_visualization(performance_df), use_container_width=True)
                 
@@ -892,14 +854,13 @@ def show():
                 try:
                     # 현재 날짜와 UUID 생성
                     today = datetime.now().strftime('%Y%m%d')
-                    unique_id = str(uuid.uuid4())[:4]  # UUID 앞 4자리만 사용
+                    unique_id = str(uuid.uuid4())[:4]
                     file_prefix = f"{today}_{unique_id}_"
                     
-                    # 엑셀 파일 생성 (필터링된 데이터 포함)
+                    # 엑셀 파일 생성
                     excel_data = create_excel_report(performance_df, filtered_data)
                     
                     if excel_data:
-                        # 다운로드 링크 생성 - 필터링된 데이터가 있으면 2시트, 없으면 1시트
                         sheet_count = "2시트" if filtered_data is not None else "1시트"
                         b64 = base64.b64encode(excel_data).decode()
                         href = f'<div class="download-button-container"><a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="{file_prefix}상담원_실적_현황.xlsx" class="download-button">엑셀 다운로드 ({sheet_count})</a></div>'
@@ -917,28 +878,23 @@ def show():
         
         # 현재 날짜 및 시간 표시 추가 (샘플에도 적용)
         current_time = datetime.now()
-        # 10시 30분 기준으로 표시 방식 결정
         cutoff_time = current_time.replace(hour=10, minute=30, second=0, microsecond=0)
         
         if current_time < cutoff_time:
-            # 10시 30분 이전 - 전체 목표 시간 사용 (3:30:00)
-            current_target_time = "3:30:00"  # 고정된 문자열로 표시
-            
-            # 이전 영업일 구하기 (공휴일 & 주말 제외)
+            current_target_time = "3:30:00"
             prev_date = get_previous_business_day(current_time)
             date_display = f"★전자계약 제외★ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {prev_date.year}년 {prev_date.month}월 {prev_date.day}일 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 전체집계"
         else:
-            # 10시 30분 이후 - 현재 시간 기준으로 목표 계산
             current_target_seconds = calculate_target_calltime_seconds(current_time.time())
             current_target_time = format_time(current_target_seconds)
             date_display = f"★전자계약 제외★ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {current_time.year}년 {current_time.month}월 {current_time.day}일 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {current_time.hour}시{current_time.minute}분 기준"
         
         st.markdown(DATE_DISPLAY_STYLE.format(date_display=date_display), unsafe_allow_html=True)
         
-        # 범례를 날짜 바로 아래에 간단하게 추가 - 간격 축소 및 양쪽 모드 시인성 개선
-        st.markdown(f'<div class="simple-legend">⏱️ 목표시간: {current_target_time} |  🚩:달성 | ⏰:분발발필요</div>', unsafe_allow_html=True)
+        # 범례 표시
+        st.markdown(f'<div class="simple-legend">⏱️ 목표시간: {current_target_time} |  🚩:달성 | ⏰:분발필요</div>', unsafe_allow_html=True)
         
-        # 컴팩트 샘플 테이블 표시
+        # 컴팩트 샘플 테이블 표시 (신입 포함)
         html_table = generate_compact_sample_html_table()
         st.markdown(html_table, unsafe_allow_html=True)
         

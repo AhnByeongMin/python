@@ -25,99 +25,32 @@ from styles.consultant_styles import (
     CONSULTANT_DESCRIPTION, USAGE_GUIDE_MARKDOWN
 )
 # 유틸리티 함수 가져오기
-from utils.utils import format_time, get_previous_business_day, is_holiday
-from utils.consultant_manager import (
-    load_consultants, save_consultants, add_consultant, remove_consultant,
-    add_team, remove_team, get_all_teams, get_part_name, get_team_name
-)
-from utils.trainee_group_manager import (
-    load_trainee_groups, add_trainee_group, remove_trainee_group,
-    get_trainee_group_target, update_trainee_group
-)
+from utils.utils import format_time, get_previous_business_day
 
-# 근무 설정 상수
-WORK_CONFIG = {
-    "평일근무": {
-        "target_hours": 3,
-        "target_minutes": 30,
-        "work_start": "09:30",
-        "lunch_start": "11:50",
-        "lunch_end": "13:00",
-        "work_end": "18:30"
-    },
-    "휴일근무": {
-        "target_hours": 2,
-        "target_minutes": 0,
-        "work_start": "10:00",
-        "lunch_start": "12:30",
-        "lunch_end": "13:00",
-        "work_end": "15:30"
-    }
-}
-
-def get_work_config(target_date=None, manual_config=None):
-    """
-    근무 설정을 반환합니다.
-
-    Args:
-        target_date: 목표 날짜 (None이면 오늘)
-        manual_config: 수동 설정 딕셔너리 (None이면 자동)
-
-    Returns:
-        dict: 근무 설정
-    """
-    # 1. 수동 설정 최우선
-    if manual_config is not None:
-        return manual_config
-
-    # 2. 자동 감지
-    if target_date is None:
-        target_date = datetime.now()
-
-    # 3. 휴일 여부 확인 (기존 is_holiday 함수 활용)
-    if is_holiday(target_date):
-        return WORK_CONFIG["휴일근무"]
-    else:
-        return WORK_CONFIG["평일근무"]
-
-def calculate_target_calltime_seconds(current_time=None, work_config=None):
+def calculate_target_calltime_seconds(current_time=None):
     """
     현재 시간 기준으로 목표 콜타임을 계산합니다.
-
+    
     Args:
         current_time: 현재 시간 (None일 경우 실제 현재 시간 사용)
-        work_config: 근무 설정 딕셔너리 (None이면 기본 평일 설정)
-
+        
     Returns:
         int: 현재 시간까지 목표 콜타임 (초 단위)
     """
     if current_time is None:
         current_time = datetime.now().time()
-
-    # 기본 설정 (평일)
-    if work_config is None:
-        work_config = WORK_CONFIG["평일근무"]
-
-    # 목표 시간 (초)
-    total_target_seconds = (
-        work_config["target_hours"] * 3600 +
-        work_config["target_minutes"] * 60
-    )
-
-    # 근무 시간 파싱
-    work_start = time(*map(int, work_config["work_start"].split(":")))
-    lunch_start = time(*map(int, work_config["lunch_start"].split(":")))
-    lunch_end = time(*map(int, work_config["lunch_end"].split(":")))
-    work_end = time(*map(int, work_config["work_end"].split(":")))
-
-    # 전체 근무 시간 (점심 시간 제외, 분 단위)
-    total_work_minutes = (
-        (work_end.hour * 60 + work_end.minute) -
-        (work_start.hour * 60 + work_start.minute)
-    ) - (
-        (lunch_end.hour * 60 + lunch_end.minute) -
-        (lunch_start.hour * 60 + lunch_start.minute)
-    )
+    
+    # 업무 시간 정의
+    work_start = time(9, 30)  # 9:30 AM
+    lunch_start = time(11, 50)  # 11:50 AM
+    lunch_end = time(13, 0)  # 1:00 PM
+    work_end = time(18, 30)  # 6:30 PM
+    
+    # 전체 목표 콜타임 (3시간 30분 = 210분 = 12,600초)
+    total_target_seconds = 3 * 3600 + 30 * 60
+    
+    # 전체 근무 시간 (점심 시간 제외 = 7시간 50분 = 470분)
+    total_work_minutes = ((18 * 60 + 30) - (9 * 60 + 30)) - ((13 * 60) - (11 * 60 + 50))
     
     # 분 단위로 현재 경과 근무 시간 계산
     elapsed_minutes = 0
@@ -130,15 +63,15 @@ def calculate_target_calltime_seconds(current_time=None, work_config=None):
     if current_time > work_end:
         return total_target_seconds
     
-    # 현재 시간이 오전 업무 시간인 경우
+    # 현재 시간이 오전 업무 시간인 경우 (9:30 ~ 11:50)
     if work_start <= current_time < lunch_start:
         elapsed_minutes = (current_time.hour * 60 + current_time.minute) - (work_start.hour * 60 + work_start.minute)
-
-    # 현재 시간이 점심 시간인 경우
+    
+    # 현재 시간이 점심 시간인 경우 (11:50 ~ 13:00)
     elif lunch_start <= current_time < lunch_end:
         elapsed_minutes = (lunch_start.hour * 60 + lunch_start.minute) - (work_start.hour * 60 + work_start.minute)
-
-    # 현재 시간이 오후 업무 시간인 경우
+    
+    # 현재 시간이 오후 업무 시간인 경우 (13:00 ~ 18:30)
     elif lunch_end <= current_time <= work_end:
         morning_minutes = (lunch_start.hour * 60 + lunch_start.minute) - (work_start.hour * 60 + work_start.minute)
         afternoon_minutes = (current_time.hour * 60 + current_time.minute) - (lunch_end.hour * 60 + lunch_end.minute)
@@ -193,34 +126,16 @@ def generate_compact_html_table(df: pd.DataFrame, is_previous_day: bool = False)
     date_str = f"{current_time.month}월{current_time.day}일({['월','화','수','목','금','토','일'][current_time.weekday()]})"
     time_str = f"{current_time.hour}:{current_time.minute:02d}"
     
-    # 목표 콜타임 계산 - 휴일/평일 구분 및 수동 설정 반영
+    # 목표 콜타임 계산 - 전체 목표와 현재 시간 기준 목표 모두 계산
+    total_target_seconds = 3 * 3600 + 30 * 60  # 3:30:00 = 12600초 (전체 목표)
+    
+    # 현재 시간 기준 목표 콜타임 계산
     if is_previous_day:
-        # 전날 데이터를 조회하는 경우
-        prev_date = get_previous_business_day(current_time)
-        work_config = get_work_config(
-            target_date=prev_date,
-            manual_config=st.session_state.get('manual_work_config')
-        )
-        current_target_seconds = (
-            work_config["target_hours"] * 3600 +
-            work_config["target_minutes"] * 60
-        )
+        # 전날 데이터를 조회하는 경우 - 전체 목표 시간 사용 (3:30:00)
+        current_target_seconds = total_target_seconds
     else:
-        # 당일 데이터를 조회하는 경우
-        work_config = get_work_config(
-            target_date=current_time,
-            manual_config=st.session_state.get('manual_work_config')
-        )
-        current_target_seconds = calculate_target_calltime_seconds(
-            current_time.time(),
-            work_config
-        )
-
-    # 전체 목표 시간 (프로그레스 바 계산용)
-    total_target_seconds = (
-        work_config["target_hours"] * 3600 +
-        work_config["target_minutes"] * 60
-    )
+        # 당일 데이터를 조회하는 경우 - 현재 시간 기준으로 목표 계산
+        current_target_seconds = calculate_target_calltime_seconds(current_time.time())
        # 테이블 컨테이너 시작
     html += '<div class="table-container">'
     html += '<table class="compact-table">'
@@ -521,37 +436,18 @@ def generate_compact_sample_html_table() -> str:
     # 10시 30분 기준으로 표시 방식 결정
     cutoff_time = current_time.replace(hour=10, minute=30, second=0, microsecond=0)
     is_previous_day = current_time < cutoff_time
-
-    # 목표 콜타임 계산 - 휴일/평일 구분 및 수동 설정 반영
+    
+    # 목표 콜타임 계산
+    total_target_seconds = 3 * 3600 + 30 * 60  # 3:30:00 = 12600초 (전체 목표)
+    
     if is_previous_day:
-        # 전날 데이터를 조회하는 경우
-        prev_date = get_previous_business_day(current_time)
-        work_config = get_work_config(
-            target_date=prev_date,
-            manual_config=st.session_state.get('manual_work_config')
-        )
-        current_target_seconds = (
-            work_config["target_hours"] * 3600 +
-            work_config["target_minutes"] * 60
-        )
-        current_target_time = format_time(current_target_seconds)
+        # 전날 데이터를 조회하는 경우 - 전체 목표 시간 사용
+        current_target_seconds = total_target_seconds
+        current_target_time = "3:30:00"
     else:
-        # 당일 데이터를 조회하는 경우
-        work_config = get_work_config(
-            target_date=current_time,
-            manual_config=st.session_state.get('manual_work_config')
-        )
-        current_target_seconds = calculate_target_calltime_seconds(
-            current_time.time(),
-            work_config
-        )
+        # 당일 데이터를 조회하는 경우 - 현재 시간 기준으로 목표 계산
+        current_target_seconds = calculate_target_calltime_seconds(current_time.time())
         current_target_time = format_time(current_target_seconds)
-
-    # 전체 목표 시간 (프로그레스 바 계산용)
-    total_target_seconds = (
-        work_config["target_hours"] * 3600 +
-        work_config["target_minutes"] * 60
-    )
     
     # 테이블 컨테이너 시작
     html += '<div class="table-container">'
@@ -564,8 +460,8 @@ def generate_compact_sample_html_table() -> str:
         html += f'<th>{header}</th>'
     html += '</tr></thead>'
     
-    # 목표 시간을 초 단위로 변환 (이미 위에서 계산된 total_target_seconds 사용)
-    target_seconds = total_target_seconds
+    # 목표 시간 (3시간 30분)을 초 단위로 변환
+    target_seconds = 3 * 3600 + 30 * 60  # 3:30:00 = 12600초
     
     # 각 시간 문자열을 초로 변환하는 함수
     def time_to_seconds(time_str):
@@ -834,300 +730,7 @@ def show():
     # 타이틀 및 설명
     st.title("👥상담원 실적 현황")
     st.markdown(CONSULTANT_DESCRIPTION, unsafe_allow_html=True)
-
-    # ========== 근무 설정 UI ==========
-    with st.expander("⚙️ 근무 설정", expanded=False):
-        # 세션 상태 초기화
-        if 'work_mode' not in st.session_state:
-            st.session_state.work_mode = "자동 감지"
-        if 'manual_work_config' not in st.session_state:
-            st.session_state.manual_work_config = None
-
-        # 모드 선택
-        work_mode = st.radio(
-            "설정 모드",
-            ["자동 감지", "수동 설정"],
-            horizontal=True,
-            key="work_mode"
-        )
-
-        st.markdown("---")
-
-        # 현재 상태 표시
-        current_date = datetime.now()
-        is_today_holiday = is_holiday(current_date)
-        work_type_text = "🏖️ 휴일근무" if is_today_holiday else "🏢 평일근무"
-        default_target = "2시간" if is_today_holiday else "3시간 30분"
-
-        st.info(f"""
-**📅 현재 상태**
-- 오늘: {current_date.strftime('%Y-%m-%d')} ({['월','화','수','목','금','토','일'][current_date.weekday()]})
-- 근무 유형: {work_type_text}
-- 기본 목표: {default_target}
-        """)
-
-        if work_mode == "수동 설정":
-            st.markdown("---")
-
-            # 전일자 조회 옵션
-            if 'force_previous_day' not in st.session_state:
-                st.session_state.force_previous_day = False
-
-            force_previous_day = st.checkbox(
-                "🔙 전일자 조회 모드 (10시 30분 이후에도 전날 데이터 조회)",
-                value=st.session_state.force_previous_day,
-                key="force_previous_day_checkbox"
-            )
-            st.session_state.force_previous_day = force_previous_day
-
-            if force_previous_day:
-                prev_date = get_previous_business_day(datetime.now())
-                st.info(f"📅 전일자 조회: {prev_date.year}년 {prev_date.month}월 {prev_date.day}일 ({['월','화','수','목','금','토','일'][prev_date.weekday()]})")
-
-            st.markdown("---")
-            st.markdown("### 🎯 전체 목표 시간 설정")
-
-            # 프리셋 선택을 위한 임시 값 초기화
-            if 'preset_hours' not in st.session_state:
-                st.session_state.preset_hours = 3
-            if 'preset_minutes' not in st.session_state:
-                st.session_state.preset_minutes = 30
-
-            # 빠른 프리셋 (위젯보다 먼저 배치)
-            st.markdown("💡 **빠른 설정:**")
-            preset_cols = st.columns(4)
-
-            with preset_cols[0]:
-                if st.button("평일 3.5h"):
-                    st.session_state.preset_hours = 3
-                    st.session_state.preset_minutes = 30
-                    # 바로 적용
-                    config = WORK_CONFIG["평일근무"].copy()
-                    config["target_hours"] = 3
-                    config["target_minutes"] = 30
-                    st.session_state.manual_work_config = config
-                    st.rerun()
-
-            with preset_cols[1]:
-                if st.button("휴일 2h"):
-                    st.session_state.preset_hours = 2
-                    st.session_state.preset_minutes = 0
-                    # 바로 적용
-                    config = WORK_CONFIG["휴일근무"].copy()
-                    config["target_hours"] = 2
-                    config["target_minutes"] = 0
-                    st.session_state.manual_work_config = config
-                    st.rerun()
-
-            with preset_cols[2]:
-                if st.button("교육 3h"):
-                    st.session_state.preset_hours = 3
-                    st.session_state.preset_minutes = 0
-                    # 바로 적용
-                    config = WORK_CONFIG["평일근무"].copy()
-                    config["target_hours"] = 3
-                    config["target_minutes"] = 0
-                    st.session_state.manual_work_config = config
-                    st.rerun()
-
-            with preset_cols[3]:
-                if st.button("교육 2.5h"):
-                    st.session_state.preset_hours = 2
-                    st.session_state.preset_minutes = 30
-                    # 바로 적용
-                    config = WORK_CONFIG["평일근무"].copy()
-                    config["target_hours"] = 2
-                    config["target_minutes"] = 30
-                    st.session_state.manual_work_config = config
-                    st.rerun()
-
-            st.markdown("---")
-
-            # 현재 설정 표시
-            if st.session_state.get('manual_work_config'):
-                current_config = st.session_state.manual_work_config
-                st.success(f"✅ 현재 설정: {current_config['target_hours']}시간 {current_config['target_minutes']}분")
-
-            # 수동 입력 (프리셋 후에 배치)
-            col1, col2 = st.columns(2)
-            with col1:
-                manual_hours = st.number_input(
-                    "시간",
-                    min_value=0,
-                    max_value=12,
-                    value=st.session_state.preset_hours,
-                    key="manual_hours"
-                )
-            with col2:
-                manual_minutes = st.number_input(
-                    "분",
-                    min_value=0,
-                    max_value=59,
-                    value=st.session_state.preset_minutes,
-                    key="manual_minutes"
-                )
-
-            col_btn1, col_btn2 = st.columns(2)
-            with col_btn1:
-                if st.button("✅ 적용하기", use_container_width=True):
-                    # 수동 설정을 평일 기준으로 복사 후 목표시간만 변경
-                    config = WORK_CONFIG["평일근무"].copy()
-                    config["target_hours"] = manual_hours
-                    config["target_minutes"] = manual_minutes
-                    st.session_state.manual_work_config = config
-                    st.session_state.preset_hours = manual_hours
-                    st.session_state.preset_minutes = manual_minutes
-                    st.rerun()
-
-            with col_btn2:
-                if st.button("🔄 초기화", use_container_width=True):
-                    st.session_state.manual_work_config = None
-                    st.session_state.preset_hours = 3
-                    st.session_state.preset_minutes = 30
-                    st.session_state.force_previous_day = False
-                    st.rerun()
-        else:
-            # 자동 감지 모드일 때는 수동 설정 초기화
-            st.session_state.manual_work_config = None
-            st.session_state.force_previous_day = False
-
-    # ========== 상담사 관리 UI ==========
-    with st.expander("👥 상담사 및 팀 관리", expanded=False):
-        tab1, tab2, tab3 = st.tabs(["📋 상담사 관리", "🏢 팀 관리", "🐣 신입 그룹 관리"])
-
-        # === 탭 1: 상담사 관리 ===
-        with tab1:
-            consultants = load_consultants()
-            teams = get_all_teams()
-
-            st.markdown("### 📝 상담사 추가")
-            col_add1, col_add2, col_add3 = st.columns([2, 2, 1])
-            with col_add1:
-                selected_team_add = st.selectbox("팀 선택", teams, key="add_consultant_team")
-            with col_add2:
-                new_consultant_name = st.text_input("상담사 이름", key="add_consultant_name")
-            with col_add3:
-                st.write("")
-                st.write("")
-                if st.button("➕ 추가", use_container_width=True):
-                    if new_consultant_name.strip():
-                        if add_consultant(selected_team_add, new_consultant_name.strip()):
-                            st.success(f"✅ {new_consultant_name}님이 {selected_team_add}에 추가되었습니다!")
-                            st.rerun()
-                        else:
-                            st.error(f"❌ 이미 존재하는 상담사입니다.")
-                    else:
-                        st.warning("⚠️ 이름을 입력해주세요.")
-
-            st.markdown("---")
-            st.markdown("### 👤 상담사 삭제")
-            for team in teams:
-                members = consultants.get(team, [])
-                if members:
-                    st.markdown(f"**{team}** ({len(members)}명)")
-                    cols = st.columns(4)
-                    for idx, member in enumerate(members):
-                        with cols[idx % 4]:
-                            if st.button(f"🗑️ {member}", key=f"remove_{team}_{member}"):
-                                if remove_consultant(team, member):
-                                    st.success(f"✅ {member}님이 삭제되었습니다!")
-                                    st.rerun()
-                                else:
-                                    st.error("❌ 삭제 실패")
-
-        # === 탭 2: 팀 관리 ===
-        with tab2:
-            st.markdown("### ➕ 팀 추가")
-            col_team1, col_team2 = st.columns([3, 1])
-            with col_team1:
-                new_team_name = st.text_input("팀 이름", key="add_team_name")
-            with col_team2:
-                st.write("")
-                st.write("")
-                if st.button("➕ 팀 추가", use_container_width=True):
-                    if new_team_name.strip():
-                        if add_team(new_team_name.strip()):
-                            st.success(f"✅ {new_team_name} 팀이 추가되었습니다!")
-                            st.rerun()
-                        else:
-                            st.error("❌ 이미 존재하는 팀입니다.")
-                    else:
-                        st.warning("⚠️ 팀 이름을 입력해주세요.")
-
-            st.markdown("---")
-            st.markdown("### 🏢 팀 목록 및 삭제")
-            consultants = load_consultants()
-            for team in get_all_teams():
-                member_count = len(consultants.get(team, []))
-                col_team_info1, col_team_info2 = st.columns([4, 1])
-                with col_team_info1:
-                    st.info(f"**{team}**: {member_count}명")
-                with col_team_info2:
-                    # CRM팀과 온라인팀은 삭제 불가
-                    if team not in ["CRM팀", "온라인팀"]:
-                        if member_count == 0:
-                            if st.button(f"🗑️ 삭제", key=f"remove_team_{team}"):
-                                if remove_team(team):
-                                    st.success(f"✅ {team}이 삭제되었습니다!")
-                                    st.rerun()
-                        else:
-                            st.button(f"🔒 ({member_count}명)", key=f"locked_team_{team}", disabled=True)
-
-        # === 탭 3: 신입 그룹 관리 ===
-        with tab3:
-            trainee_groups = load_trainee_groups()
-
-            st.markdown("### ➕ 신입 그룹 추가")
-            col_trainee1, col_trainee2, col_trainee3, col_trainee4 = st.columns([2, 1, 1, 1])
-            with col_trainee1:
-                new_group_name = st.text_input("그룹명 (예: 신입그룹1기)", key="add_trainee_group_name")
-            with col_trainee2:
-                trainee_hours = st.number_input("목표(시)", min_value=0, max_value=12, value=2, key="trainee_hours")
-            with col_trainee3:
-                trainee_minutes = st.number_input("목표(분)", min_value=0, max_value=59, value=0, key="trainee_minutes")
-            with col_trainee4:
-                st.write("")
-                st.write("")
-                if st.button("➕ 추가", key="add_trainee_group_btn", use_container_width=True):
-                    if new_group_name.strip():
-                        # 먼저 팀으로 추가
-                        if add_team(new_group_name.strip()):
-                            # 그 다음 신입 그룹 설정 추가
-                            if add_trainee_group(new_group_name.strip(), trainee_hours, trainee_minutes):
-                                st.success(f"✅ {new_group_name} 그룹이 추가되었습니다! (목표: {trainee_hours}시간 {trainee_minutes}분)")
-                                st.rerun()
-                            else:
-                                st.error("❌ 신입 그룹 설정 추가 실패")
-                        else:
-                            st.error("❌ 이미 존재하는 그룹입니다.")
-                    else:
-                        st.warning("⚠️ 그룹명을 입력해주세요.")
-
-            st.markdown("---")
-            st.markdown("### 🐣 신입 그룹 목록")
-            if trainee_groups:
-                for group_name, config in trainee_groups.items():
-                    col_g1, col_g2, col_g3 = st.columns([2, 2, 1])
-                    with col_g1:
-                        st.info(f"**{group_name}**")
-                    with col_g2:
-                        st.write(f"목표: {config['target_hours']}시간 {config['target_minutes']}분")
-                    with col_g3:
-                        if st.button(f"🗑️ 삭제", key=f"remove_trainee_{group_name}"):
-                            # 팀에 소속된 상담사가 있는지 확인
-                            consultants = load_consultants()
-                            if group_name in consultants and len(consultants[group_name]) > 0:
-                                st.error(f"❌ 그룹에 소속된 상담사가 있습니다. 먼저 상담사를 다른 팀으로 이동하거나 삭제해주세요.")
-                            else:
-                                # 신입 그룹 설정 삭제
-                                if remove_trainee_group(group_name):
-                                    # 팀도 삭제
-                                    remove_team(group_name)
-                                    st.success(f"✅ {group_name}이 삭제되었습니다!")
-                                    st.rerun()
-            else:
-                st.info("📋 등록된 신입 그룹이 없습니다.")
-
+    
     # 추가 스타일 적용 - 범례 스타일 (라이트모드/다크모드 모두 시인성 개선 및 간격 조정)
     st.markdown("""
     <style>
@@ -1246,44 +849,20 @@ def show():
                 # 오전 10시 30분 기준으로 표시 방식 결정
                 cutoff_time = current_time.replace(hour=10, minute=30, second=0, microsecond=0)
 
-                # 전일자 강제 조회 옵션 확인
-                force_previous = st.session_state.get('force_previous_day', False)
-
                 # 목표 시간 및 이모지 기준 설정
-                if current_time < cutoff_time or force_previous:
-                    # 10시 30분 이전 - 전날 데이터 조회
+                if current_time < cutoff_time:
+                    # 10시 30분 이전 - 전체 목표 시간 사용 (3:30:00)
                     is_previous_day = True
-
+                    current_target_time = "3:30:00"  # 고정된 문자열로 표시
+                    
                     # 이전 영업일 구하기 (공휴일 & 주말 제외)
                     prev_date = get_previous_business_day(current_time)
-
-                    # 전날 근무 설정 가져오기
-                    work_config = get_work_config(
-                        target_date=prev_date,
-                        manual_config=st.session_state.get('manual_work_config')
-                    )
-                    current_target_seconds = (
-                        work_config["target_hours"] * 3600 +
-                        work_config["target_minutes"] * 60
-                    )
-                    current_target_time = format_time(current_target_seconds)
-
                     date_display = f"★전자계약 제외★ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {prev_date.year}년 {prev_date.month}월 {prev_date.day}일 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 전체집계"
                 else:
-                    # 10시 30분 이후 - 당일 데이터 조회
+                    # 10시 30분 이후 - 현재 시간 기준으로 목표 계산
                     is_previous_day = False
-
-                    # 당일 근무 설정 가져오기
-                    work_config = get_work_config(
-                        target_date=current_time,
-                        manual_config=st.session_state.get('manual_work_config')
-                    )
-                    current_target_seconds = calculate_target_calltime_seconds(
-                        current_time.time(),
-                        work_config
-                    )
+                    current_target_seconds = calculate_target_calltime_seconds(current_time.time())
                     current_target_time = format_time(current_target_seconds)
-
                     date_display = f"★전자계약 제외★ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {current_time.year}년 {current_time.month}월 {current_time.day}일 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {current_time.hour}시{current_time.minute}분 기준"
 
                 # 상태 표시
@@ -1340,37 +919,18 @@ def show():
         current_time = datetime.now()
         # 10시 30분 기준으로 표시 방식 결정
         cutoff_time = current_time.replace(hour=10, minute=30, second=0, microsecond=0)
-
+        
         if current_time < cutoff_time:
-            # 10시 30분 이전 - 전날 데이터 조회
+            # 10시 30분 이전 - 전체 목표 시간 사용 (3:30:00)
+            current_target_time = "3:30:00"  # 고정된 문자열로 표시
+            
             # 이전 영업일 구하기 (공휴일 & 주말 제외)
             prev_date = get_previous_business_day(current_time)
-
-            # 전날 근무 설정 가져오기
-            work_config = get_work_config(
-                target_date=prev_date,
-                manual_config=st.session_state.get('manual_work_config')
-            )
-            current_target_seconds = (
-                work_config["target_hours"] * 3600 +
-                work_config["target_minutes"] * 60
-            )
-            current_target_time = format_time(current_target_seconds)
-
             date_display = f"★전자계약 제외★ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {prev_date.year}년 {prev_date.month}월 {prev_date.day}일 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 전체집계"
         else:
-            # 10시 30분 이후 - 당일 데이터 조회
-            # 당일 근무 설정 가져오기
-            work_config = get_work_config(
-                target_date=current_time,
-                manual_config=st.session_state.get('manual_work_config')
-            )
-            current_target_seconds = calculate_target_calltime_seconds(
-                current_time.time(),
-                work_config
-            )
+            # 10시 30분 이후 - 현재 시간 기준으로 목표 계산
+            current_target_seconds = calculate_target_calltime_seconds(current_time.time())
             current_target_time = format_time(current_target_seconds)
-
             date_display = f"★전자계약 제외★ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {current_time.year}년 {current_time.month}월 {current_time.day}일 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {current_time.hour}시{current_time.minute}분 기준"
         
         st.markdown(DATE_DISPLAY_STYLE.format(date_display=date_display), unsafe_allow_html=True)

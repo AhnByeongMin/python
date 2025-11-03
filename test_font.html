@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>폰트 테스트</title>
+    <style>
+        /* 페이지 레이아웃 */
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+
+        .test-card {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #1976d2;
+            margin-bottom: 10px;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 14px;
+            margin: 10px 0;
+        }
+
+        .status.loading {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .font-test {
+            padding: 20px;
+            margin: 20px 0;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            background: #fafafa;
+        }
+
+        .default-font {
+            font-family: Arial, sans-serif;
+        }
+
+        .custom-font {
+            font-family: 'BodyFriendM EU', 'Malgun Gothic', Arial, sans-serif;
+        }
+
+        .info {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+        }
+
+        code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+
+        .console-output {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            overflow-x: auto;
+            margin: 20px 0;
+        }
+
+        .console-output .error {
+            color: #f48771;
+        }
+
+        .console-output .success {
+            color: #89d185;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-card">
+        <h1>바디프랜드M EU 폰트 테스트</h1>
+        <div id="status" class="status loading">폰트 로딩 중...</div>
+
+        <div class="info">
+            <strong>테스트 방법:</strong><br>
+            1. 브라우저 개발자 도구 (F12) 열기<br>
+            2. Console 탭에서 에러 확인<br>
+            3. Network 탭에서 폰트 로딩 확인<br>
+            4. Elements 탭에서 Computed 스타일 확인
+        </div>
+
+        <div class="font-test default-font">
+            <h3>기본 폰트 (Arial)</h3>
+            <p>안녕하세요. 이것은 기본 폰트로 표시됩니다.</p>
+            <p>The quick brown fox jumps over the lazy dog.</p>
+            <p>1234567890 !@#$%^&*()</p>
+        </div>
+
+        <div class="font-test custom-font">
+            <h3>커스텀 폰트 (BodyFriendM EU)</h3>
+            <p>안녕하세요. 이것은 바디프랜드M EU 폰트로 표시됩니다.</p>
+            <p>The quick brown fox jumps over the lazy dog.</p>
+            <p>1234567890 !@#$%^&*()</p>
+        </div>
+
+        <div class="console-output" id="console">
+            <div class="success">✓ 폰트 테스트 페이지 로드됨</div>
+            <div>콘솔 로그가 여기에 표시됩니다...</div>
+        </div>
+    </div>
+
+    <script>
+        // 폰트 로딩 체크
+        document.fonts.ready.then(() => {
+            console.log('✓ 모든 폰트 로드 완료');
+
+            // BodyFriendM EU 폰트가 로드되었는지 확인
+            const bodyFriendFont = document.fonts.check('12px "BodyFriendM EU"');
+
+            const statusDiv = document.getElementById('status');
+            const consoleDiv = document.getElementById('console');
+
+            if (bodyFriendFont) {
+                statusDiv.textContent = '✓ BodyFriendM EU 폰트 로드 성공!';
+                statusDiv.className = 'status success';
+
+                consoleDiv.innerHTML = `
+                    <div class="success">✓ 폰트 테스트 페이지 로드됨</div>
+                    <div class="success">✓ BodyFriendM EU 폰트 사용 가능</div>
+                    <div>총 로드된 폰트: ${document.fonts.size}개</div>
+                `;
+            } else {
+                statusDiv.textContent = '✗ BodyFriendM EU 폰트 로드 실패';
+                statusDiv.className = 'status error';
+
+                consoleDiv.innerHTML = `
+                    <div class="success">✓ 폰트 테스트 페이지 로드됨</div>
+                    <div class="error">✗ BodyFriendM EU 폰트를 찾을 수 없음</div>
+                    <div>총 로드된 폰트: ${document.fonts.size}개</div>
+                    <div>폴백 폰트 사용 중</div>
+                `;
+            }
+
+            // 사용 가능한 모든 폰트 출력
+            console.log('로드된 폰트 목록:');
+            for (let font of document.fonts) {
+                console.log(`  - ${font.family} (${font.weight}, ${font.style})`);
+            }
+        });
+
+        // 에러 로깅
+        window.addEventListener('error', (e) => {
+            console.error('에러 발생:', e.message);
+            const consoleDiv = document.getElementById('console');
+            consoleDiv.innerHTML += `<div class="error">✗ 에러: ${e.message}</div>`;
+        });
+    </script>
+</body>
+</html>

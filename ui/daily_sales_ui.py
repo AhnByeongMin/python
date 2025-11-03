@@ -571,19 +571,20 @@ def display_results(
         # 온라인팀 데이터 (일반회차 캠페인이 'CB-'로 시작)
         online_data = daily_source_df[daily_source_df['일반회차 캠페인'].astype(str).str.startswith('CB-')].copy()
         
-        # 판매 유형 컬럼이 있는지 확인
-        has_sale_type = '판매 유형' in daily_source_df.columns
-        
+        # 판매 유형 컬럼이 있는지 확인 (공백 있음/없음 둘 다 체크)
+        has_sale_type = '판매유형' in daily_source_df.columns or '판매 유형' in daily_source_df.columns
+        sale_type_col = '판매유형' if '판매유형' in daily_source_df.columns else '판매 유형'
+
         # CRM팀 데이터 처리
         for _, row in crm_data.iterrows():
-            sale_type = str(row.get('판매 유형', '')).lower() if has_sale_type else ''
+            sale_type = str(row.get(sale_type_col, '')).lower() if has_sale_type else ''
             category = str(row.get('대분류', '')).lower()
             
-            # 판매 유형에 따른 분류
-            if '케어' in sale_type:
+            # 판매 유형에 따른 분류 (우선순위: 더케어 > 멤버십 > 대분류)
+            if '더케어' in sale_type or 'the care' in sale_type or 'thecare' in sale_type:
                 crm_thecare += 1
                 crm_total += 1
-            elif '멤버십' in sale_type or '멤버쉽' in sale_type:
+            elif '멤버' in sale_type:  # 멤버십, 멤버쉽, 멤버 모두 포함
                 crm_membership += 1
                 crm_total += 1
             # 대분류에 따른 분류
@@ -599,14 +600,14 @@ def display_results(
         
         # 온라인팀 데이터 처리
         for _, row in online_data.iterrows():
-            sale_type = str(row.get('판매 유형', '')).lower() if has_sale_type else ''
+            sale_type = str(row.get(sale_type_col, '')).lower() if has_sale_type else ''
             category = str(row.get('대분류', '')).lower()
             
-            # 판매 유형에 따른 분류
-            if '케어' in sale_type:
+            # 판매 유형에 따른 분류 (우선순위: 더케어 > 멤버십 > 대분류)
+            if '더케어' in sale_type or 'the care' in sale_type or 'thecare' in sale_type:
                 online_thecare += 1
                 online_total += 1
-            elif '멤버십' in sale_type or '멤버쉽' in sale_type:
+            elif '멤버' in sale_type:  # 멤버십, 멤버쉽, 멤버 모두 포함
                 online_membership += 1
                 online_total += 1
             # 대분류에 따른 분류

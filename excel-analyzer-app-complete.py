@@ -155,22 +155,21 @@ st.markdown("""
     /* 라이트 모드(기본) 스타일 */
     .dark-card {
         background-color: #f8f9fa;
-        color: #212529;
+        color: #000;
     }
     
     /* 다크 모드 스타일 */
-    @media (prefers-color-scheme: dark) {
-        .dark-card {
-            background-color: #343a40;
-            color: #f8f9fa;
-        }
+    .stApp[data-theme="dark"] .dark-card,
+    html[data-theme="dark"] .dark-card {
+        background-color: #343a40;
+        color: #fff;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # 최상위 탭 생성 (상담사 프로모션 탭 추가)
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 매출 데이터 분석 도구", 
+    "📊 예약 체험 신규 현황", 
     "👥 상담원 실적 현황", 
     "📢 캠페인/정규분배 현황", 
     "📈 일일 매출 현황", 

@@ -17,18 +17,21 @@ from typing import Tuple, Dict, List, Optional, Any, Union
 # 설정 가져오기 (config.py에서 상수 가져오기)
 from utils.config import CAMPAIGN_SETTINGS
 
-def process_campaign_files(files) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+def process_campaign_files(files) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], int, int]:
     """
     다수의 엑셀 파일을 처리하는 함수
-    
+
     Args:
         files: 업로드된 엑셀 파일 목록
-        
+
     Returns:
-        Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]: 처리 결과 데이터프레임과 중복 제거된 원본 데이터
+        Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], int, int]:
+            처리 결과 데이터프레임, 중복 제거된 원본 데이터, 중복 제거 전 개수, 중복 제거 후 개수
     """
     all_data = []
-    
+    total_before_dedup = 0
+    total_after_dedup = 0
+
     # 각 파일 처리
     for file in files:
         try:
@@ -64,10 +67,14 @@ def process_campaign_files(files) -> Tuple[Optional[pd.DataFrame], Optional[pd.D
             
             # 컬럼 이름 변경 (발견된 열만)
             df = df.rename(columns={v: k for k, v in found_cols.items()})
-            
+
             # 상담주문번호 컬럼이 있으면 중복 제거
             if "상담주문번호" in df.columns:
+                before_count = len(df)
                 df.drop_duplicates(subset=["상담주문번호"], inplace=True)
+                after_count = len(df)
+                total_before_dedup += before_count
+                total_after_dedup += after_count
             
             # 일반회차 캠페인 컬럼이 있는 경우에만 처리
             if "일반회차 캠페인" in df.columns:
@@ -86,19 +93,19 @@ def process_campaign_files(files) -> Tuple[Optional[pd.DataFrame], Optional[pd.D
     # 데이터가 없는 경우
     if not all_data:
         st.error("처리 가능한 데이터가 없습니다.")
-        return None, None
+        return None, None, 0, 0
     
     # 모든 데이터 합치기
     try:
         combined_df = pd.concat(all_data, ignore_index=True)
     except Exception as e:
         st.error(f"데이터 결합 중 오류가 발생했습니다: {str(e)}")
-        return None, None
-    
+        return None, None, 0, 0
+
     # 데이터가 비어 있는 경우
     if combined_df.empty:
         st.error("결합된 데이터가 비어 있습니다.")
-        return None, None
+        return None, None, 0, 0
     
     # 중복 제거된 원본 데이터 저장
     cleaned_data = combined_df.copy()
@@ -108,7 +115,7 @@ def process_campaign_files(files) -> Tuple[Optional[pd.DataFrame], Optional[pd.D
         # 필요한 컬럼이 있는지 확인
         if "일반회차 캠페인" not in combined_df.columns or "상담DB상태" not in combined_df.columns:
             st.error("일반회차 캠페인 또는 상담DB상태 컬럼이 없습니다.")
-            return None, None
+            return None, None, 0, 0
         
         # 피벗 테이블 생성 - 일반회차 캠페인 × 상담DB상태의 레코드 수
         pivot_df = pd.pivot_table(
@@ -182,13 +189,13 @@ def process_campaign_files(files) -> Tuple[Optional[pd.DataFrame], Optional[pd.D
         
         # 컬럼 순서 적용
         result_df = result_df[final_columns]
-        
-        return result_df, cleaned_data
-        
+
+        return result_df, cleaned_data, total_before_dedup, total_after_dedup
+
     except Exception as e:
         st.error(f"데이터 그룹화 및 집계 중 오류가 발생했습니다: {str(e)}")
         st.error(f"상세 오류: {str(e.__class__.__name__)}: {str(e)}")
-        return None, None
+        return None, None, 0, 0
 
 def process_consultant_data(cleaned_data) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """

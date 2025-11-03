@@ -21,26 +21,98 @@ import os
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def classify_product(row: pd.Series) -> str:
+    """
+    대분류와 판매유형을 기반으로 제품을 5개 카테고리로 분류
+
+    분류 규칙:
+    1. 라클라우드: 대분류 = "라클라우드"
+    2. 안마의자: 대분류 = "안마의자" AND 판매유형에 "더케어" 미포함
+    3. 더케어: 대분류 = "안마의자" AND 판매유형에 "더케어" 포함
+    4. 정수기: 대분류 = "정수기" AND 판매유형에 "멤버십" 미포함
+    5. 멤버십: 대분류 = "정수기" AND 판매유형에 "멤버십" 포함
+
+    Args:
+        row: 데이터프레임의 행 (대분류, 판매 유형 컬럼 필요)
+
+    Returns:
+        str: 분류된 제품명 (안마의자, 라클라우드, 정수기, 더케어, 멤버십)
+    """
+    category = str(row["대분류"]).lower()
+    sales_type = str(row["판매 유형"]).lower()
+
+    # 라클라우드
+    if "라클" in category:
+        return "라클라우드"
+
+    # 안마의자 vs 더케어
+    if "안마" in category:
+        if "케어" in sales_type or "더케어" in sales_type:
+            return "더케어"
+        else:
+            return "안마의자"
+
+    # 정수기 vs 멤버십
+    if "정수기" in category:
+        if "멤버" in sales_type:
+            return "멤버십"
+        else:
+            return "정수기"
+
+    # 분류되지 않은 경우 대분류 그대로 반환
+    return row["대분류"]
+
+def clean_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    의미없는 컬럼 제거 함수
+    - Unnamed 컬럼 제거
+    - 컬럼명이 없거나, 0, "0"인 컬럼 제거
+
+    Args:
+        df: 원본 데이터프레임
+
+    Returns:
+        pd.DataFrame: 정리된 데이터프레임
+    """
+    # Unnamed 컬럼 제거
+    df = df.loc[:, ~df.columns.str.contains('^Unnamed', na=False)]
+
+    # 컬럼명이 없거나, 0, "0"인 컬럼 제거
+    valid_columns = []
+    for col in df.columns:
+        col_str = str(col).strip()
+        # 빈 문자열, None, 0, "0" 제외
+        if col_str and col_str not in ['0', 'nan', 'None', '']:
+            valid_columns.append(col)
+
+    df = df[valid_columns]
+
+    # 모든 값이 NaN인 컬럼 제거
+    df = df.dropna(axis=1, how='all')
+
+    return df
+
+
 def process_promotion_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """
     프로모션 분석용 엑셀 파일을 처리하는 함수
-    
+
     Args:
         file: 업로드된 엑셀 파일 객체
-        
+
     Returns:
         Tuple[Optional[pd.DataFrame], Optional[str]]: 처리된 데이터프레임과 오류 메시지(있는 경우)
     """
     try:
         # 파일 포인터 초기화
         file.seek(0)
-        
+
         # 엑셀 파일 읽기 (3행에 헤더 있음)
         df = pd.read_excel(file, header=2)
-        
-        # 컬럼명이 비어있는 열 제거
-        if df is not None:
-            df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+
+        # 의미없는 컬럼 제거
+        df = clean_dataframe_columns(df)
         
         # 필요한 컬럼 확인
         required_columns = ["상담사", "일반회차 캠페인", "판매 인입경로", "대분류", "판매 유형", "매출 금액", "주문 일자"]
@@ -105,9 +177,193 @@ def process_promotion_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]
     except Exception as e:
         return None, f"프로모션 파일 처리 중 오류가 발생했습니다: {str(e)}"
 
+def analyze_promotion_data_new(
+    df: pd.DataFrame,
+    analysis_mode: str,  # "제품별" | "건수별" | "금액별"
+    product_weights: Dict[str, int],  # 제품별 가중치
+    include_services: bool,  # 서비스성 제품 포함 여부
+    min_criteria: int,  # 최소 기준치 (건수)
+    promotion_tiers: List[Dict],  # 프로모션 구간 설정
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    include_online: bool = False,  # 온라인파트 포함 여부
+    include_indirect: bool = False  # 연계승인 포함 여부 (기본값: False, 직접승인만)
+) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
+    """
+    새로운 프로모션 분석 함수
+
+    Args:
+        df: 데이터프레임
+        analysis_mode: 분석 기준 ("제품별" | "건수별" | "금액별")
+        product_weights: 제품별 가중치 {"안마의자": 5, "라클라우드": 3, ...}
+        include_services: 서비스성 제품 포함 여부
+        min_criteria: 최소 기준치 (승인 건수)
+        promotion_tiers: 프로모션 구간 설정
+        start_date: 시작 날짜
+        end_date: 종료 날짜
+        include_online: 온라인파트 포함 여부 (기본값: False, CRM파트만)
+        include_indirect: 연계승인 포함 여부 (기본값: False, 직접승인만)
+
+    Returns:
+        Tuple[Optional[pd.DataFrame], Optional[str], Optional[pd.DataFrame]]:
+            결과 데이터프레임, 오류 메시지, 필터링된 원본 데이터
+    """
+    try:
+        # 데이터 복사
+        filtered_df = df.copy()
+        original_filtered_df = None  # 필터링된 원본 데이터 저장용
+
+        # 날짜 범위 필터링
+        if start_date and end_date:
+            if "주문 일자" in filtered_df.columns:
+                if not pd.api.types.is_datetime64_any_dtype(filtered_df["주문 일자"]):
+                    filtered_df["주문 일자"] = pd.to_datetime(filtered_df["주문 일자"], errors='coerce')
+                filtered_df = filtered_df[(filtered_df["주문 일자"] >= start_date) &
+                                         (filtered_df["주문 일자"] <= end_date)]
+
+        # 판매 인입경로 필터링 (직접승인/연계승인)
+        if "판매 인입경로" in filtered_df.columns:
+            if not include_indirect:
+                # 직접승인만 포함 (판매 인입경로가 CRM인 경우만)
+                filtered_df = filtered_df[
+                    filtered_df["판매 인입경로"].astype(str).str.contains("CRM|crm", case=False, na=False)
+                ]
+            # include_indirect=True이면 필터링 없이 전체 포함
+
+        # 상담사 조직 필터링
+        if "상담사 조직" in filtered_df.columns:
+            if not include_online:
+                # CRM파트만 포함 (온라인파트 제외)
+                # "CRM팀", "CRM파트" 등 다양한 명칭 포함
+                filtered_df = filtered_df[
+                    filtered_df["상담사 조직"].astype(str).str.contains("CRM|crm", case=False, na=False)
+                ]
+
+        # 제품 분류 컬럼 추가
+        filtered_df["제품분류"] = filtered_df.apply(classify_product, axis=1)
+
+        # 필터링된 원본 데이터 저장 (엑셀 다운로드용)
+        original_filtered_df = filtered_df.copy()
+
+        # 상담사별 집계
+        result_data = []
+        consultants = filtered_df["상담사"].unique()
+
+        for consultant in consultants:
+            consultant_df = filtered_df[filtered_df["상담사"] == consultant]
+
+            # 제품별 건수 집계
+            product_counts = {}
+            for product in ["안마의자", "라클라우드", "정수기", "더케어", "멤버십"]:
+                count = len(consultant_df[consultant_df["제품분류"] == product])
+                product_counts[product] = count
+
+            # 총 승인 건수 및 승인액
+            if include_services:
+                # 서비스 포함 시 모든 제품 카운트
+                total_count = sum(product_counts.values())
+            else:
+                # 서비스 제외 시 안마의자, 라클라우드, 정수기만
+                total_count = (product_counts["안마의자"] +
+                             product_counts["라클라우드"] +
+                             product_counts["정수기"])
+
+            total_amount = consultant_df["매출 금액"].sum()
+
+            # 제품별 점수 계산 (제품별 기준인 경우)
+            product_score = 0
+            if analysis_mode == "제품별":
+                for product, count in product_counts.items():
+                    weight = product_weights.get(product, 0)
+                    product_score += count * weight
+
+            # 결과 딕셔너리
+            result_dict = {
+                "상담사": consultant,
+                "안마의자": product_counts["안마의자"],
+                "라클라우드": product_counts["라클라우드"],
+                "정수기": product_counts["정수기"],
+                "더케어": product_counts["더케어"],
+                "멤버십": product_counts["멤버십"],
+                "승인건수": total_count,
+                "승인액": total_amount
+            }
+
+            # 제품별 모드인 경우 점수 추가
+            if analysis_mode == "제품별":
+                result_dict["점수"] = product_score
+
+            result_data.append(result_dict)
+
+        # 결과 없음
+        if not result_data:
+            return None, "조건에 맞는 상담사가 없습니다.", original_filtered_df
+
+        # 데이터프레임 생성
+        result_df = pd.DataFrame(result_data)
+
+        # 정렬 기준 설정
+        if analysis_mode == "제품별":
+            # 1차: 점수, 2차: 승인액
+            result_df = result_df.sort_values(by=["점수", "승인액"], ascending=[False, False])
+        elif analysis_mode == "금액별":
+            # 1차: 승인액, 2차: 승인건수
+            result_df = result_df.sort_values(by=["승인액", "승인건수"], ascending=[False, False])
+        else:  # 건수별
+            # 1차: 승인건수, 2차: 승인액
+            result_df = result_df.sort_values(by=["승인건수", "승인액"], ascending=[False, False])
+
+        # 순위 부여
+        result_df["순위"] = range(1, len(result_df) + 1)
+
+        # 프로모션 대상 판정
+        if analysis_mode == "제품별":
+            # 점수 구간에 따른 등급 판정
+            def get_tier(score):
+                for tier in sorted(promotion_tiers, key=lambda x: x["min_score"], reverse=True):
+                    min_score = tier["min_score"]
+                    max_score = tier.get("max_score")
+
+                    if max_score is None:
+                        # 최대값이 없으면 min_score 이상인 경우
+                        if score >= min_score:
+                            return tier["name"]
+                    else:
+                        # 범위 확인
+                        if min_score <= score <= max_score:
+                            return tier["name"]
+                return "대상 제외"
+
+            result_df["프로모션등급"] = result_df["점수"].apply(get_tier)
+        else:
+            # 건수별/금액별은 최소 기준치 충족 여부만 표시
+            result_df["프로모션대상"] = result_df["승인건수"].apply(
+                lambda x: "Y" if x >= min_criteria else "N"
+            )
+
+        # 컬럼 순서 재정렬
+        if analysis_mode == "제품별":
+            columns = ["순위", "상담사", "안마의자", "라클라우드", "정수기"]
+            if include_services:
+                columns.extend(["더케어", "멤버십"])
+            columns.extend(["승인건수", "승인액", "점수", "프로모션등급"])
+        else:
+            columns = ["순위", "상담사", "안마의자", "라클라우드", "정수기"]
+            if include_services:
+                columns.extend(["더케어", "멤버십"])
+            columns.extend(["승인건수", "승인액", "프로모션대상"])
+
+        result_df = result_df[columns]
+
+        return result_df, None, original_filtered_df
+
+    except Exception as e:
+        return None, f"분석 중 오류: {str(e)}", None
+
+
 def analyze_promotion_data(
-    df: pd.DataFrame, 
-    include_products: List[str], 
+    df: pd.DataFrame,
+    include_products: List[str],
     include_services: bool,
     direct_only: bool,
     criteria: List[str],
@@ -357,27 +613,276 @@ def analyze_promotion_data(
     except Exception as e:
         return None, f"프로모션 데이터 분석 중 오류가 발생했습니다: {str(e)}"
 
-def create_excel_report(result_df: pd.DataFrame, original_df: pd.DataFrame) -> Optional[bytes]:
+def create_promotion_excel(result_df: pd.DataFrame, original_df: pd.DataFrame, analysis_mode: str = "건수별") -> Optional[bytes]:
     """
-    가장 기본적인 방식으로 엑셀 파일 생성
+    프로모션 결과와 원본 데이터를 포함한 엑셀 파일 생성 (스타일링 포함)
+
+    Args:
+        result_df: 프로모션 분석 결과 데이터프레임
+        original_df: 전체 원본 데이터 (의미없는 컬럼만 제거됨, 필터링 안됨)
+        analysis_mode: 분석 모드 ("제품별", "건수별", "금액별")
+
+    Returns:
+        Optional[bytes]: 엑셀 파일 바이트 데이터
     """
     try:
         output = BytesIO()
-        
-        # 모든 서식 제거하고 가장 기본적인 방식으로만 저장
+
+        # 결과 데이터를 순위별로 정렬 (순위 컬럼이 있는 경우)
+        if '순위' in result_df.columns:
+            result_df = result_df.sort_values('순위').reset_index(drop=True)
+
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            # 결과 데이터 저장
-            result_df.to_excel(writer, sheet_name='프로모션결과', index=False)
-            
-            # 원본 데이터 저장 (있는 경우)
+            # 워크북 객체 먼저 가져오기
+            workbook = writer.book
+
+            # 시트 1: 프로모션 분석 결과 (수동으로 작성)
+            worksheet1 = workbook.add_worksheet('프로모션결과')
+
+            # 시트 2: 원본 데이터
             if original_df is not None and not original_df.empty:
                 original_df.to_excel(writer, sheet_name='원본데이터', index=False)
-        
+
+            # === 서식 정의 ===
+
+            # 헤더 서식
+            header_format = workbook.add_format({
+                'bold': True,
+                'bg_color': '#4472C4',
+                'font_color': 'white',
+                'border': 1,
+                'align': 'center',
+                'valign': 'vcenter',
+                'text_wrap': True
+            })
+
+            # 등급별 서식 (제품별 분석용) - 더 선명한 색상
+            tier1_format = workbook.add_format({
+                'bg_color': '#764ba2',  # 진한 보라
+                'font_color': '#FFFFFF',
+                'bold': True,
+                'border': 1,
+                'align': 'center'
+            })
+            tier2_format = workbook.add_format({
+                'bg_color': '#f5576c',  # 핑크
+                'font_color': '#FFFFFF',
+                'bold': True,
+                'border': 1,
+                'align': 'center'
+            })
+            tier3_format = workbook.add_format({
+                'bg_color': '#00f2fe',  # 시안
+                'font_color': '#FFFFFF',
+                'bold': True,
+                'border': 1,
+                'align': 'center'
+            })
+
+            # Y/N 서식 - 더 선명한 색상
+            y_format = workbook.add_format({
+                'bg_color': '#38ef7d',  # 밝은 초록
+                'font_color': '#FFFFFF',
+                'bold': True,
+                'border': 1,
+                'align': 'center'
+            })
+            n_format = workbook.add_format({
+                'bg_color': '#ff6a00',  # 오렌지-빨강
+                'font_color': '#FFFFFF',
+                'bold': True,
+                'border': 1,
+                'align': 'center'
+            })
+
+            # 숫자 서식
+            number_format = workbook.add_format({
+                'num_format': '#,##0',
+                'border': 1,
+                'align': 'right'
+            })
+            money_format = workbook.add_format({
+                'num_format': '₩#,##0',
+                'border': 1,
+                'align': 'right'
+            })
+            text_format = workbook.add_format({
+                'border': 1,
+                'align': 'left'
+            })
+            center_format = workbook.add_format({
+                'border': 1,
+                'align': 'center'
+            })
+
+            # 순위별 그라데이션 서식 생성 함수 (건수별/금액별 분석용)
+            def get_rank_format(rank, max_rank):
+                """순위에 따른 그라데이션 색상 계산"""
+                if max_rank <= 1:
+                    ratio = 0
+                else:
+                    ratio = (rank - 1) / (max_rank - 1)
+
+                # 초록(0) → 노랑(0.5) → 빨강(1.0) 그라데이션
+                if ratio <= 0.5:
+                    # 초록 → 노랑
+                    r = int(144 + (255 - 144) * (ratio * 2))
+                    g = int(238 - (238 - 235) * (ratio * 2))
+                    b = int(144 - 144 * (ratio * 2))
+                else:
+                    # 노랑 → 빨강
+                    r = 255
+                    g = int(235 - 235 * ((ratio - 0.5) * 2))
+                    b = 0
+
+                bg_color = f'#{r:02X}{g:02X}{b:02X}'
+                font_color = '#000000' if ratio < 0.7 else '#FFFFFF'
+                is_bold = rank <= 3
+
+                fmt = workbook.add_format({
+                    'bg_color': bg_color,
+                    'font_color': font_color,
+                    'bold': is_bold,
+                    'border': 1,
+                    'align': 'center'
+                })
+                return fmt
+
+            # === 헤더 행 스타일링 ===
+            for col_num, value in enumerate(result_df.columns.values):
+                worksheet1.write(0, col_num, value, header_format)
+
+            # === 데이터 행 스타일링 ===
+            rank_col_idx = None
+            tier_col_idx = None
+            yn_col_idx = None
+
+            # 컬럼 인덱스 찾기
+            for idx, col in enumerate(result_df.columns):
+                if col == '순위':
+                    rank_col_idx = idx
+                elif col == '프로모션등급':
+                    tier_col_idx = idx
+                elif col == '프로모션대상':
+                    yn_col_idx = idx
+
+            # 순위 최대값 계산 (그라데이션용)
+            max_rank = result_df['순위'].max() if '순위' in result_df.columns else 0
+
+            # 데이터 행별 스타일 적용
+            for row_idx, row in result_df.iterrows():
+                excel_row = row_idx + 1  # 헤더가 0번 행, 데이터는 1번 행부터
+
+                for col_idx, col_name in enumerate(result_df.columns):
+                    value = row[col_name]
+
+                    # 제품별 분석: 등급 컬럼만 색상 적용
+                    if analysis_mode == '제품별':
+                        if col_idx == tier_col_idx and pd.notna(value):
+                            val_str = str(value)
+                            if '1등급' in val_str:
+                                worksheet1.write(excel_row, col_idx, value, tier1_format)
+                            elif '2등급' in val_str:
+                                worksheet1.write(excel_row, col_idx, value, tier2_format)
+                            elif '3등급' in val_str:
+                                worksheet1.write(excel_row, col_idx, value, tier3_format)
+                            else:
+                                worksheet1.write(excel_row, col_idx, value, center_format)
+
+                        # 순위는 색상 없이 중앙 정렬만
+                        elif col_idx == rank_col_idx:
+                            worksheet1.write(excel_row, col_idx, value if pd.notna(value) else '', center_format)
+
+                        # 숫자 컬럼 포맷팅
+                        elif col_name in ['누적승인(액)', '포상금']:
+                            if pd.notna(value):
+                                worksheet1.write(excel_row, col_idx, value, money_format)
+                            else:
+                                worksheet1.write(excel_row, col_idx, '', money_format)
+                        elif col_name in ['누적승인(건)', '제품점수', '추첨권', '안마의자', '라클라우드', '정수기', '더케어', '멤버십', '안', '라', '정', '케어', '멤버']:
+                            if pd.notna(value):
+                                worksheet1.write(excel_row, col_idx, value, number_format)
+                            else:
+                                worksheet1.write(excel_row, col_idx, '', number_format)
+
+                        # 텍스트 컬럼
+                        else:
+                            worksheet1.write(excel_row, col_idx, value if pd.notna(value) else '', text_format)
+
+                    # 건수별/금액별 분석: 순위에 그라데이션 적용
+                    else:
+                        # 순위 컬럼 그라데이션 스타일링
+                        if col_idx == rank_col_idx and pd.notna(value):
+                            try:
+                                rank = int(value)
+                                rank_fmt = get_rank_format(rank, max_rank)
+                                worksheet1.write(excel_row, col_idx, value, rank_fmt)
+                            except:
+                                worksheet1.write(excel_row, col_idx, value, center_format)
+
+                        # Y/N 컬럼 스타일링 (건수별만)
+                        elif col_idx == yn_col_idx and pd.notna(value):
+                            val_str = str(value).upper()
+                            if val_str == 'Y':
+                                worksheet1.write(excel_row, col_idx, value, y_format)
+                            elif val_str == 'N':
+                                worksheet1.write(excel_row, col_idx, value, n_format)
+                            else:
+                                worksheet1.write(excel_row, col_idx, value, center_format)
+
+                        # 숫자 컬럼 포맷팅
+                        elif col_name in ['누적승인(액)', '포상금']:
+                            if pd.notna(value):
+                                worksheet1.write(excel_row, col_idx, value, money_format)
+                            else:
+                                worksheet1.write(excel_row, col_idx, '', money_format)
+                        elif col_name in ['누적승인(건)', '제품점수', '추첨권', '안마의자', '라클라우드', '정수기', '더케어', '멤버십', '안', '라', '정', '케어', '멤버']:
+                            if pd.notna(value):
+                                worksheet1.write(excel_row, col_idx, value, number_format)
+                            else:
+                                worksheet1.write(excel_row, col_idx, '', number_format)
+
+                        # 텍스트 컬럼
+                        else:
+                            worksheet1.write(excel_row, col_idx, value if pd.notna(value) else '', text_format)
+
+            # === 열 너비 자동 조정 ===
+            for i, col in enumerate(result_df.columns):
+                max_len = max(
+                    result_df[col].astype(str).map(len).max() if not result_df[col].empty else 0,
+                    len(str(col))
+                ) + 2
+                worksheet1.set_column(i, i, min(max_len, 30))
+
+            # === 원본데이터 시트 헤더 스타일링 ===
+            if original_df is not None and not original_df.empty and '원본데이터' in writer.sheets:
+                worksheet2 = writer.sheets['원본데이터']
+                for col_num, value in enumerate(original_df.columns.values):
+                    worksheet2.write(0, col_num, value, header_format)
+
+                # 열 너비 조정
+                for i, col in enumerate(original_df.columns):
+                    max_len = max(
+                        original_df[col].astype(str).map(len).max() if not original_df[col].empty else 0,
+                        len(str(col))
+                    ) + 2
+                    worksheet2.set_column(i, i, min(max_len, 30))
+
         output.seek(0)
         return output.getvalue()
-    except:
-        # 모든 예외 처리 간소화
+
+    except Exception as e:
+        print(f"엑셀 파일 생성 중 오류: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None
+
+
+def create_excel_report(result_df: pd.DataFrame, original_df: pd.DataFrame) -> Optional[bytes]:
+    """
+    기존 호환성을 위한 래퍼 함수
+    """
+    return create_promotion_excel(result_df, original_df)
 
 def save_promotion_config(config_name: str, config_data: Dict) -> Tuple[bool, Optional[str]]:
     """

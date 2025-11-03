@@ -154,9 +154,9 @@ def show():
         # 진행 상태 표시
         with st.spinner('파일 분석 중...'):
             start_time = time.time()
-            
+
             # 캠페인 분석 실행
-            results, cleaned_data = process_campaign_files(st.session_state.campaign_files)
+            results, cleaned_data, before_count, after_count = process_campaign_files(st.session_state.campaign_files)
             st.session_state.campaign_results = results
             st.session_state.cleaned_data = cleaned_data
             
@@ -170,10 +170,19 @@ def show():
             
             # 분석 완료 플래그 설정
             st.session_state.analysis_complete = True
-            
-            # 분석 소요 시간 표시
+
+            # 분석 소요 시간 및 중복 제거 정보 표시
             end_time = time.time()
-            st.info(f"분석 완료 (소요 시간: {end_time - start_time:.2f}초)")
+
+            # 중복 제거 메시지 생성
+            if before_count > 0 and after_count > 0:
+                removed_count = before_count - after_count
+                if removed_count > 0:
+                    st.success(f"✅ 분석 완료! 중복 제거: {removed_count}건 (원본: {before_count}건 → 최종: {after_count}건) | 소요 시간: {end_time - start_time:.2f}초")
+                else:
+                    st.success(f"✅ 분석 완료! 중복 없음 (총 {after_count}건) | 소요 시간: {end_time - start_time:.2f}초")
+            else:
+                st.info(f"분석 완료 (소요 시간: {end_time - start_time:.2f}초)")
     
     # 분석 결과 표시 (분석이 완료된 경우에만)
     if st.session_state.analysis_complete:

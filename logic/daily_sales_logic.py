@@ -33,6 +33,11 @@ INSTALLATION_TARGET_DATA = {
         "직접": {"건수": 480, "매출액": 227049802},  # 본사
         "연계": {"건수": 6, "매출액": 2952104},      # 연계
         "온라인": {"건수": None, "매출액": 923000000}  # 온라인 (건수 목표 없음)
+    },
+    "더케어": {
+        "직접": {"건수": 0, "매출액": 0},  # 본사 (목표 값 설정 필요)
+        "연계": {"건수": 0, "매출액": 0},  # 연계 (목표 값 설정 필요)
+        "온라인": {"건수": None, "매출액": 0}  # 온라인 (건수 목표 없음)
     }
 }
 
@@ -150,26 +155,31 @@ def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
             return None, (f"승인매출 파일에서 유효한 데이터를 찾을 수 없습니다.\n"
                          f"시도한 결과들:\n" + "\n".join(error_messages))
         
-        # 필요한 컬럼 확인
+        # 필요한 컬럼 확인 (판매유형은 선택사항)
         required_columns = [
             "주문 일자", "판매인입경로", "일반회차 캠페인", "대분류", "매출액"
         ]
-        
+
+        optional_columns = ["판매유형"]
+
         # 컬럼명이 비슷한 경우 매핑
         column_mapping = {}
-        for req_col in required_columns:
+        all_columns = required_columns + optional_columns
+
+        for req_col in all_columns:
             if req_col in df.columns:
                 continue  # 이미 존재하면 매핑 불필요
-                
+
             # 유사한 컬럼명 목록
             similar_cols = {
                 "주문 일자": ["주문일자", "주문날짜", "계약일자", "승인일자", "주문 등록 일자"],
                 "판매인입경로": ["판매 인입경로", "인입경로", "영업채널", "영업 채널", "판매 인입경로"],
                 "일반회차 캠페인": ["캠페인", "일반회차캠페인", "회차", "회차 캠페인", "일반회차 캠페인"],
                 "대분류": ["제품", "품목", "상품", "상품명", "제품명", "품목명", "카테고리"],
-                "매출액": ["순매출액", "매출금액", "매출", "net_sales", "net_revenue", "매출 금액"]
+                "매출액": ["순매출액", "매출금액", "매출", "net_sales", "net_revenue", "매출 금액"],
+                "판매유형": ["판매 유형", "유형", "계약유형", "계약 유형"]
             }
-            
+
             if req_col in similar_cols:
                 # 유사한 컬럼 찾기
                 for col in df.columns:
@@ -177,13 +187,13 @@ def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
                     if any(term.lower() in col_str for term in similar_cols[req_col]):
                         column_mapping[col] = req_col
                         break
-        
+
         # 컬럼명 변경
         if column_mapping:
             df = df.rename(columns=column_mapping)
             print(f"컬럼 매핑 적용: {column_mapping}")
-        
-        # 필요한 컬럼 확인 재검사
+
+        # 필요한 컬럼 확인 재검사 (판매유형은 선택사항이므로 제외)
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             # 현재 컬럼 목록도 함께 표시
@@ -276,26 +286,31 @@ def process_installation_file(file) -> Tuple[Optional[pd.DataFrame], Optional[st
             except:
                 pass  # 변환 실패 시 무시
         
-        # 필요한 컬럼 확인
+        # 필요한 컬럼 확인 (판매유형은 선택사항)
         required_columns = [
             "판매인입경로", "일반회차 캠페인", "대분류", "매출액"
         ]
-        
+
+        optional_columns = ["판매유형"]
+
         # 컬럼명이 비슷한 경우 매핑
         column_mapping = {}
-        for req_col in required_columns:
+        all_columns = required_columns + optional_columns
+
+        for req_col in all_columns:
             if req_col in df.columns:
                 continue  # 이미 존재하면 매핑 불필요
-                
+
             # 유사한 컬럼명 목록
             similar_cols = {
                 "판매인입경로": ["판매 인입경로", "인입경로", "영업채널", "영업 채널", "판매 인입경로"],
                 "일반회차 캠페인": ["캠페인", "일반회차캠페인", "회차", "회차 캠페인", "일반회차 캠페인"],
                 "대분류": ["제품", "품목", "상품", "상품명", "제품명", "품목명", "카테고리"],
                 "매출액": ["순매출액", "매출금액", "매출", "net_sales", "net_revenue", "매출 금액"],
-                "품목명": ["상품명", "제품명", "상품 명", "제품 명", "품목 명"]
+                "품목명": ["상품명", "제품명", "상품 명", "제품 명", "품목 명"],
+                "판매유형": ["판매 유형", "유형", "계약유형", "계약 유형"]
             }
-            
+
             if req_col in similar_cols:
                 # 유사한 컬럼 찾기
                 for col in df.columns:
@@ -303,13 +318,13 @@ def process_installation_file(file) -> Tuple[Optional[pd.DataFrame], Optional[st
                     if any(term.lower() in col_str for term in similar_cols[req_col]):
                         column_mapping[col] = req_col
                         break
-        
+
         # 컬럼명 변경
         if column_mapping:
             df = df.rename(columns=column_mapping)
             print(f"설치매출 컬럼 매핑 적용: {column_mapping}")
-        
-        # 필요한 컬럼 확인 재검사
+
+        # 필요한 컬럼 확인 재검사 (판매유형은 선택사항이므로 제외)
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             # 현재 컬럼 목록도 함께 표시
@@ -371,11 +386,16 @@ def analyze_installation_by_product_model(installation_df):
     
     # 1. 안마의자 필터링 - 대분류 열과 품목명 열을 모두 확인
     massage_chair_mask = installation_df["대분류"].astype(str).str.contains("안마의자", case=False, na=False)
-    
+
     # 품목명에도 '안마'가 포함된 항목 추가 (대분류가 다른 경우를 위해)
     massage_chair_mask |= installation_df[product_name_col].astype(str).str.contains("안마", case=False, na=False)
-    
+
     massage_chair_data = installation_df[massage_chair_mask].copy()
+
+    # 더케어 제외 - 판매유형에 "더케어"가 포함된 항목 제거
+    if "판매유형" in massage_chair_data.columns:
+        thecare_mask = massage_chair_data["판매유형"].astype(str).str.contains("더케어", case=False, na=False)
+        massage_chair_data = massage_chair_data[~thecare_mask].copy()
     
     if massage_chair_data.empty:
         # 빈 결과 반환
@@ -413,26 +433,33 @@ def analyze_installation_by_product_model(installation_df):
     def clean_product_name(name):
         if pd.isna(name):
             return ""
-            
+
         name_str = str(name).strip()
-        
-        # 앞에 괄호가 있는 경우 제거 (더 확실한 방법으로 처리)
-        # 예: (A)팔콘S 또는 (A) 팔콘S와 같은 형태 모두 처리
-        if name_str.startswith("(") and ")" in name_str:
+
+        # 앞에 괄호가 있는 경우 제거 (리퍼 제품 처리)
+        # 예: (A)팔콘S, (A) 팔콘S, (S)파라오네오 등
+        while name_str.startswith("(") and ")" in name_str:
             # 첫 번째 닫는 괄호 위치 찾기
             close_pos = name_str.find(")")
             if close_pos >= 0:
                 # 괄호와 그 내용을 제거
                 name_str = name_str[close_pos + 1:].strip()
-        
+            else:
+                break
+
+        # 에덴로보 통합 - 에덴로보로 시작하는 모든 제품은 "에덴로보"로 통합
+        if name_str.startswith("에덴로보"):
+            return "에덴로보"
+
         # 괄호가 있으면 괄호 앞부분만 사용
         if '(' in name_str:
             name_str = name_str.split('(')[0].strip()
-        
+
         # 공백이 있다면 첫 단어만 추출 (ex: "팔코닉 B&O" -> "팔코닉")
-        if ' ' in name_str and '+' not in name_str:  # '+' 기호가 없는 경우에만
+        # 단, '+' 기호가 있거나 에덴로보인 경우는 제외
+        if ' ' in name_str and '+' not in name_str and not name_str.startswith("에덴로보"):
             name_str = name_str.split(' ')[0].strip()
-            
+
         return name_str
     
     filtered_data['정리품목명'] = filtered_data[product_name_col].apply(clean_product_name)
@@ -622,24 +649,24 @@ def analyze_approval_data_by_product(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         # 빈 결과 반환
         return pd.DataFrame({
-            "제품": ["안마의자", "라클라우드", "정수기", "총합계"],
-            "목표_건수": [0, 0, 0, 0],
-            "목표_매출액": [0, 0, 0, 0],
-            "총승인(본사/연계)_건수": [0, 0, 0, 0],
-            "총승인(본사/연계)_매출액": [0, 0, 0, 0],
-            "달성률_건수": [0, 0, 0, 0],
-            "달성률_매출액": [0, 0, 0, 0],
-            "본사직접승인_건수": [0, 0, 0, 0],
-            "본사직접승인_매출액": [0, 0, 0, 0],
-            "연계승인_건수": [0, 0, 0, 0],
-            "연계승인_매출액": [0, 0, 0, 0],
-            "온라인_건수": [0, 0, 0, 0],
-            "온라인_매출액": [0, 0, 0, 0],
-            "온라인달성률_매출액": [0, 0, 0, 0]
+            "제품": ["안마의자", "라클라우드", "정수기", "더케어", "총합계"],
+            "목표_건수": [0, 0, 0, 0, 0],
+            "목표_매출액": [0, 0, 0, 0, 0],
+            "총승인(본사/연계)_건수": [0, 0, 0, 0, 0],
+            "총승인(본사/연계)_매출액": [0, 0, 0, 0, 0],
+            "달성률_건수": [0, 0, 0, 0, 0],
+            "달성률_매출액": [0, 0, 0, 0, 0],
+            "본사직접승인_건수": [0, 0, 0, 0, 0],
+            "본사직접승인_매출액": [0, 0, 0, 0, 0],
+            "연계승인_건수": [0, 0, 0, 0, 0],
+            "연계승인_매출액": [0, 0, 0, 0, 0],
+            "온라인_건수": [0, 0, 0, 0, 0],
+            "온라인_매출액": [0, 0, 0, 0, 0],
+            "온라인달성률_매출액": [0, 0, 0, 0, 0]
         })
     
     # 제품 종류 정의
-    products = ["안마의자", "라클라우드", "정수기"]
+    products = ["안마의자", "라클라우드", "정수기", "더케어"]
     
     # 매출 컬럼 사용 (매출액만 사용)
     revenue_column = "매출액"
@@ -647,20 +674,20 @@ def analyze_approval_data_by_product(df: pd.DataFrame) -> pd.DataFrame:
     # 매출액 컬럼이 없는 경우 오류 반환
     if revenue_column not in df.columns:
         return pd.DataFrame({
-            "제품": ["안마의자", "라클라우드", "정수기", "총합계"],
-            "목표_건수": [0, 0, 0, 0],
-            "목표_매출액": [0, 0, 0, 0],
-            "총승인(본사/연계)_건수": [0, 0, 0, 0],
-            "총승인(본사/연계)_매출액": [0, 0, 0, 0],
-            "달성률_건수": [0, 0, 0, 0],
-            "달성률_매출액": [0, 0, 0, 0],
-            "본사직접승인_건수": [0, 0, 0, 0],
-            "본사직접승인_매출액": [0, 0, 0, 0],
-            "연계승인_건수": [0, 0, 0, 0],
-            "연계승인_매출액": [0, 0, 0, 0],
-            "온라인_건수": [0, 0, 0, 0],
-            "온라인_매출액": [0, 0, 0, 0],
-            "온라인달성률_매출액": [0, 0, 0, 0]
+            "제품": ["안마의자", "라클라우드", "정수기", "더케어", "총합계"],
+            "목표_건수": [0, 0, 0, 0, 0],
+            "목표_매출액": [0, 0, 0, 0, 0],
+            "총승인(본사/연계)_건수": [0, 0, 0, 0, 0],
+            "총승인(본사/연계)_매출액": [0, 0, 0, 0, 0],
+            "달성률_건수": [0, 0, 0, 0, 0],
+            "달성률_매출액": [0, 0, 0, 0, 0],
+            "본사직접승인_건수": [0, 0, 0, 0, 0],
+            "본사직접승인_매출액": [0, 0, 0, 0, 0],
+            "연계승인_건수": [0, 0, 0, 0, 0],
+            "연계승인_매출액": [0, 0, 0, 0, 0],
+            "온라인_건수": [0, 0, 0, 0, 0],
+            "온라인_매출액": [0, 0, 0, 0, 0],
+            "온라인달성률_매출액": [0, 0, 0, 0, 0]
         })
     
     # 필터링 조건 정의
@@ -699,35 +726,90 @@ def analyze_approval_data_by_product(df: pd.DataFrame) -> pd.DataFrame:
         target_affiliate_count = TARGET_DATA[product]["연계"]["건수"]  # 연계 목표 건수
         target_affiliate_amount = TARGET_DATA[product]["연계"]["매출액"]  # 연계 목표 매출액
         target_online_amount = TARGET_DATA[product]["온라인"]["매출액"]  # 온라인 목표 매출액
-        
+
         # 목표 합계 계산
         target_total_count = (target_direct_count or 0) + (target_affiliate_count or 0)  # 건수 목표 합계
         target_total_amount = target_direct_amount + target_affiliate_amount  # 매출액 목표 합계
-        
-        # 제품 필터 마스크
-        product_mask = df['대분류'].astype(str).str.contains(product)
-        
+
+        # 제품 필터 마스크 - 더케어와 안마의자 구분
+        if product == "더케어":
+            # 더케어: 대분류가 안마의자이고, 판매유형에 "더케어" 포함
+            if "판매유형" in df.columns:
+                product_mask_hq_link = (
+                    hq_link_df['대분류'].astype(str).str.contains("안마의자", case=False, na=False) &
+                    hq_link_df['판매유형'].astype(str).str.contains("더케어", case=False, na=False)
+                )
+                product_mask_hq = (
+                    hq_df['대분류'].astype(str).str.contains("안마의자", case=False, na=False) &
+                    hq_df['판매유형'].astype(str).str.contains("더케어", case=False, na=False)
+                )
+                product_mask_link = (
+                    link_df['대분류'].astype(str).str.contains("안마의자", case=False, na=False) &
+                    link_df['판매유형'].astype(str).str.contains("더케어", case=False, na=False)
+                )
+                product_mask_online = (
+                    online_df['대분류'].astype(str).str.contains("안마의자", case=False, na=False) &
+                    online_df['판매유형'].astype(str).str.contains("더케어", case=False, na=False)
+                )
+            else:
+                # 판매유형 컬럼이 없으면 더케어는 0건
+                product_mask_hq_link = pd.Series([False] * len(hq_link_df), index=hq_link_df.index)
+                product_mask_hq = pd.Series([False] * len(hq_df), index=hq_df.index)
+                product_mask_link = pd.Series([False] * len(link_df), index=link_df.index)
+                product_mask_online = pd.Series([False] * len(online_df), index=online_df.index)
+        elif product == "안마의자":
+            # 안마의자: 대분류가 안마의자이고, 판매유형에 "더케어"가 포함되지 않음
+            if "판매유형" in df.columns:
+                product_mask_hq_link = (
+                    hq_link_df['대분류'].astype(str).str.contains("안마의자", case=False, na=False) &
+                    ~hq_link_df['판매유형'].astype(str).str.contains("더케어", case=False, na=False)
+                )
+                product_mask_hq = (
+                    hq_df['대분류'].astype(str).str.contains("안마의자", case=False, na=False) &
+                    ~hq_df['판매유형'].astype(str).str.contains("더케어", case=False, na=False)
+                )
+                product_mask_link = (
+                    link_df['대분류'].astype(str).str.contains("안마의자", case=False, na=False) &
+                    ~link_df['판매유형'].astype(str).str.contains("더케어", case=False, na=False)
+                )
+                product_mask_online = (
+                    online_df['대분류'].astype(str).str.contains("안마의자", case=False, na=False) &
+                    ~online_df['판매유형'].astype(str).str.contains("더케어", case=False, na=False)
+                )
+            else:
+                # 판매유형 컬럼이 없으면 안마의자는 모두 포함
+                product_mask_hq_link = hq_link_df['대분류'].astype(str).str.contains("안마의자", case=False, na=False)
+                product_mask_hq = hq_df['대분류'].astype(str).str.contains("안마의자", case=False, na=False)
+                product_mask_link = link_df['대분류'].astype(str).str.contains("안마의자", case=False, na=False)
+                product_mask_online = online_df['대분류'].astype(str).str.contains("안마의자", case=False, na=False)
+        else:
+            # 라클라우드, 정수기: 기존 로직 유지
+            product_mask_hq_link = hq_link_df['대분류'].astype(str).str.contains(product, case=False, na=False)
+            product_mask_hq = hq_df['대분류'].astype(str).str.contains(product, case=False, na=False)
+            product_mask_link = link_df['대분류'].astype(str).str.contains(product, case=False, na=False)
+            product_mask_online = online_df['대분류'].astype(str).str.contains(product, case=False, na=False)
+
         # 1. 총승인(본사/연계)
-        hq_link_product = hq_link_df[hq_link_df['대분류'].astype(str).str.contains(product)]
+        hq_link_product = hq_link_df[product_mask_hq_link]
         total_count = len(hq_link_product)
         total_amount = hq_link_product[revenue_column].sum()
-        
+
         # 달성률 계산 (목표가 0인 경우 0으로 처리)
         count_achievement_rate = (total_count / target_total_count * 100) if target_total_count > 0 else 0
         amount_achievement_rate = (total_amount / target_total_amount * 100) if target_total_amount > 0 else 0
-        
+
         # 2. 본사직접승인
-        hq_product = hq_df[hq_df['대분류'].astype(str).str.contains(product)]
+        hq_product = hq_df[product_mask_hq]
         direct_count = len(hq_product)
         direct_amount = hq_product[revenue_column].sum()
-        
+
         # 3. 연계승인
-        link_product = link_df[link_df['대분류'].astype(str).str.contains(product)]
+        link_product = link_df[product_mask_link]
         affiliate_count = len(link_product)
         affiliate_amount = link_product[revenue_column].sum()
-        
+
         # 4. 온라인
-        online_product = online_df[online_df['대분류'].astype(str).str.contains(product)]
+        online_product = online_df[product_mask_online]
         online_count = len(online_product)
         online_amount = online_product[revenue_column].sum()
         
@@ -835,11 +917,16 @@ def analyze_installation_by_product_model(installation_df):
     
     # 1. 안마의자 필터링 - 대분류 열과 품목명 열을 모두 확인
     massage_chair_mask = installation_df["대분류"].astype(str).str.contains("안마의자", case=False, na=False)
-    
+
     # 품목명에도 '안마'가 포함된 항목 추가 (대분류가 다른 경우를 위해)
     massage_chair_mask |= installation_df[product_name_col].astype(str).str.contains("안마", case=False, na=False)
-    
+
     massage_chair_data = installation_df[massage_chair_mask].copy()
+
+    # 더케어 제외 - 판매유형에 "더케어"가 포함된 항목 제거
+    if "판매유형" in massage_chair_data.columns:
+        thecare_mask = massage_chair_data["판매유형"].astype(str).str.contains("더케어", case=False, na=False)
+        massage_chair_data = massage_chair_data[~thecare_mask].copy()
     
     if massage_chair_data.empty:
         # 빈 결과 반환
@@ -877,17 +964,33 @@ def analyze_installation_by_product_model(installation_df):
     def clean_product_name(name):
         if pd.isna(name):
             return ""
-            
+
         name_str = str(name).strip()
-        
+
+        # 앞에 괄호가 있는 경우 제거 (리퍼 제품 처리)
+        # 예: (A)팔콘S, (A) 팔콘S, (S)파라오네오 등
+        while name_str.startswith("(") and ")" in name_str:
+            # 첫 번째 닫는 괄호 위치 찾기
+            close_pos = name_str.find(")")
+            if close_pos >= 0:
+                # 괄호와 그 내용을 제거
+                name_str = name_str[close_pos + 1:].strip()
+            else:
+                break
+
+        # 에덴로보 통합 - 에덴로보로 시작하는 모든 제품은 "에덴로보"로 통합
+        if name_str.startswith("에덴로보"):
+            return "에덴로보"
+
         # 괄호가 있으면 괄호 앞부분만 사용
         if '(' in name_str:
-            return name_str.split('(')[0].strip()
-        
+            name_str = name_str.split('(')[0].strip()
+
         # 공백이 있다면 첫 단어만 추출 (ex: "팔코닉 B&O" -> "팔코닉")
-        if ' ' in name_str and '+' not in name_str:  # '+' 기호가 없는 경우에만
-            return name_str.split(' ')[0].strip()
-            
+        # 단, '+' 기호가 있거나 에덴로보인 경우는 제외
+        if ' ' in name_str and '+' not in name_str and not name_str.startswith("에덴로보"):
+            name_str = name_str.split(' ')[0].strip()
+
         return name_str
     
     filtered_data['정리품목명'] = filtered_data[product_name_col].apply(clean_product_name)
@@ -1265,12 +1368,30 @@ def create_excel_report(
         # 2. 승인매출 데이터 시트 - 원본 데이터 추가
         if original_approval_df is not None and not original_approval_df.empty:
             worksheet2 = writer.sheets['승인매출'] = workbook.add_worksheet('승인매출')
-            
+
             # 원본 데이터에서 필요한 컬럼만 추출
             approval_data = original_approval_df.copy()
-            
+
             # 유효하지 않은 컬럼 제거
             approval_data = remove_invalid_columns(approval_data)
+
+            # "제품명" 컬럼 추가 - 대분류가 안마의자이고 판매유형에 더케어가 포함되면 "더케어", 아니면 대분류 값
+            def get_product_name(row):
+                if "대분류" not in approval_data.columns:
+                    return ""
+
+                category = str(row.get("대분류", ""))
+
+                # 안마의자인 경우에만 판매유형 체크
+                if "안마의자" in category:
+                    if "판매유형" in approval_data.columns:
+                        sales_type = str(row.get("판매유형", ""))
+                        if "더케어" in sales_type:
+                            return "더케어"
+
+                return category
+
+            approval_data["제품명"] = approval_data.apply(get_product_name, axis=1)
                 
             # 특수 컬럼 타입 식별
             mobile_columns = []  # 모바일 번호 컬럼
@@ -1388,12 +1509,30 @@ def create_excel_report(
         # 3. 설치매출 데이터 시트 - 원본 데이터 추가 (있는 경우)
         if original_installation_df is not None and not original_installation_df.empty:
             worksheet3 = writer.sheets['설치매출'] = workbook.add_worksheet('설치매출')
-            
+
             # 원본 데이터에서 필요한 컬럼만 추출
             installation_data = original_installation_df.copy()
-            
+
             # 유효하지 않은 컬럼 제거
             installation_data = remove_invalid_columns(installation_data)
+
+            # "제품명" 컬럼 추가 - 대분류가 안마의자이고 판매유형에 더케어가 포함되면 "더케어", 아니면 대분류 값
+            def get_product_name_installation(row):
+                if "대분류" not in installation_data.columns:
+                    return ""
+
+                category = str(row.get("대분류", ""))
+
+                # 안마의자인 경우에만 판매유형 체크
+                if "안마의자" in category:
+                    if "판매유형" in installation_data.columns:
+                        sales_type = str(row.get("판매유형", ""))
+                        if "더케어" in sales_type:
+                            return "더케어"
+
+                return category
+
+            installation_data["제품명"] = installation_data.apply(get_product_name_installation, axis=1)
                 
             # 특수 컬럼 타입 식별
             mobile_columns = []  # 모바일 번호 컬럼

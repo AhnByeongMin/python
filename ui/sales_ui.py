@@ -1,596 +1,489 @@
 """
-매출 데이터 분석 UI 모듈
+매출 데이터 분석 UI
 
-이 모듈은 매출 데이터 분석 탭의 UI 요소와 사용자 상호작용을 처리합니다.
-비즈니스 로직과 UI를 분리하여 유지보수성을 향상시킵니다.
+이 모듈은 매출 데이터 분석 탭의 UI를 제공합니다.
 """
 
 import streamlit as st
 import pandas as pd
 import base64
-import plotly.express as px
-import plotly.graph_objects as go
-from st_aggrid import AgGrid, GridOptionsBuilder
-from st_aggrid.shared import GridUpdateMode
-from typing import Dict, List, Optional, Any
+from datetime import datetime
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
 
-# 비즈니스 로직 가져오기
-from logic.sales_logic import process_excel, analyze_data, to_excel
-# CSS 스타일 가져오기
-from styles.sales_styles import (
-    SALES_TAB_STYLE, COPY_SUCCESS_STYLE, COPY_BUTTON_HTML,
-    DOWNLOAD_GUIDE_MARKDOWN, USAGE_GUIDE_MARKDOWN, DOWNLOAD_BUTTON_STYLE  # DOWNLOAD_BUTTON_STYLE 추가
+# 로직 함수 가져오기
+from logic.sales_logic import (
+    process_sales_files,
+    filter_sales_data,
+    filter_by_reservation_date,
+    create_aggregation_tables,
+    create_excel_output
 )
-# 유틸리티 함수 가져오기
-from utils.utils import copy_to_clipboard
 
-def get_table_download_link(df: pd.DataFrame, analysis_df: pd.DataFrame, filename: str = "분석_결과.xlsx") -> str:
-    """
-    DataFrame을 엑셀 파일로 다운로드할 수 있는 링크 생성
-    
-    매개변수:
-        df: 원본 데이터프레임
-        analysis_df: 분석 결과 데이터프레임
-        filename: 다운로드될 파일명
-        
-    반환값:
-        str: HTML 다운로드 링크
-    """
-    try:
-        # 현재 날짜와 UUID 생성
-        import datetime
-        import uuid
-        today = datetime.datetime.now().strftime('%Y%m%d')
-        unique_id = str(uuid.uuid4())[:4]  # UUID 앞 4자리만 사용
-        file_prefix = f"{today}_{unique_id}_"
-        
-        val = to_excel(df, analysis_df)
-        if val is None:
-            return '<p class="error-message">엑셀 파일 생성에 실패했습니다.</p>'
-        
-        # 바이너리 데이터를 base64로 인코딩
-        b64 = base64.b64encode(val).decode()
-        href = f'<div class="download-button-container"><a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="{file_prefix}{filename}" class="download-button">엑셀 다운로드 (2시트)</a></div>'
-        return href
-    except Exception as e:
-        return f'<p class="error-message">다운로드 링크 생성 중 오류 발생: {str(e)}</p>'
 
 def show():
-    """매출 데이터 분석 탭 UI를 표시하는 메인 함수"""
-    
-    # CSS 스타일 적용
-    st.markdown(SALES_TAB_STYLE, unsafe_allow_html=True)
-    
-    # 타이틀 및 설명
-    st.title("📊 매출 데이터 분석 도구")
-    st.markdown('<p>이 도구는 엑셀 파일을 분석하여 매출 데이터를 계산하고 필터링할 수 있습니다. 업로드된 데이터에서 매출금액(VAT제외)을 계산하고 대분류별 집계를 수행합니다.</p>', unsafe_allow_html=True)
+    """예약 체험 신규 현황 탭 UI를 표시하는 메인 함수"""
 
-    # 세션 상태 초기화
-    if 'df' not in st.session_state:
-        st.session_state.df = None
-    if 'filtered_df' not in st.session_state:
-        st.session_state.filtered_df = None
-    if 'analysis_df' not in st.session_state:
-        st.session_state.analysis_df = None
-    if 'copy_success' not in st.session_state:
-        st.session_state.copy_success = False
+    # 타이틀
+    st.title("📊 예약 체험 신규 현황")
+
+    st.markdown("""
+    복수의 엑셀 파일을 업로드하여 상담사별 예약/체험신청/신규 현황을 분석합니다.
+
+    **주요 기능:**
+    - 복수 파일 동시 업로드 및 통합 분석
+    - 등록된 상담사만 필터링
+    - 예약일자 기준 관리대상 필터링 (과거, 한달 초과, 빈값)
+    - 상담DB상태별 집계 (예약, 체험신청, 신규 등)
+    - UI에서 테이블 확인 및 엑셀 다운로드
+    """)
+
+    st.markdown("---")
 
     # 파일 업로드
-    uploaded_file = st.file_uploader("통합 계약 내역 엑셀 파일을 업로드하세요", type=['xlsx', 'xls'])
+    st.subheader("📁 파일 업로드")
+    uploaded_files = st.file_uploader(
+        "엑셀 파일을 선택하세요 (복수 선택 가능)",
+        type=['xlsx', 'xls'],
+        accept_multiple_files=True,
+        key="sales_files"
+    )
 
-    # 메인 로직
-    if uploaded_file is not None:
-        # 파일 처리 및 데이터프레임 생성
-        df, error = process_excel(uploaded_file)
-        st.session_state.df = df
-        
-        if error:
-            st.error(error)
-        else:
-            # 원본 데이터 표시
-            st.subheader("원본 데이터")
-            st.write(f"총 {len(df)}개의 레코드가 로드되었습니다.")
-            
-            # AgGrid로 인터랙티브 테이블 표시
-            gb = GridOptionsBuilder.from_dataframe(df)
-            gb.configure_pagination(paginationAutoPageSize=True)
-            gb.configure_side_bar()
-            gb.configure_selection('multiple', use_checkbox=True)
+    # 옵션
+    st.subheader("⚙️ 필터 옵션")
 
-            # 날짜 컬럼 포맷 처리
-            for col in df.columns:
-                if pd.api.types.is_datetime64_any_dtype(df[col]):
+    col1, col2 = st.columns(2)
+
+    with col1:
+        include_empty = st.checkbox(
+            "일반회차 캠페인 빈값 포함",
+            value=True,
+            help="체크하면 '일반회차 캠페인' 컬럼이 비어있는 행도 포함합니다."
+        )
+
+    with col2:
+        filter_reservation = st.checkbox(
+            "예약일자 관리대상 필터 적용",
+            value=False,
+            help="예약/체험신청의 관리대상만 집계합니다. (과거 예약, 기준일 초과, 빈값)\n로우데이터는 영향 받지 않습니다."
+        )
+
+    # 예약일자 필터 설정
+    custom_end_date = None
+    custom_start_date = None
+    if filter_reservation:
+        st.markdown("##### 📅 예약일자 기준일 설정")
+
+        # 기본 기준일 계산
+        from dateutil.relativedelta import relativedelta
+        today = datetime.now().date()
+
+        # 두 개의 설정 영역
+        col_settings1, col_settings2 = st.columns(2)
+
+        with col_settings1:
+            st.markdown("**🔴 과거 기준일 (이 날짜까지는 괜찮음, 이전은 과거로 관리대상)**")
+            adjust_past = st.checkbox("과거 기준일 조정", value=False, help="금요일에 토/일 포함하려면 체크")
+
+            if adjust_past:
+                custom_start_date = st.date_input(
+                    "이 날짜까지는 괜찮음",
+                    value=today,
+                    help="예: 금요일(10/31)에 일요일(11/2)까지 보려면 11/2 선택"
+                )
+                st.caption(f"📍 {custom_start_date.strftime('%Y-%m-%d')} 이전은 과거로 관리대상")
+            else:
+                custom_start_date = today
+                st.info(f"📌 기본: 오늘({today.strftime('%Y-%m-%d')}) 이전은 과거로 관리대상")
+
+        with col_settings2:
+            st.markdown("**🔵 미래 기준일 (이 날짜까지는 괜찮음, 이후는 미래로 관리대상)**")
+
+            # 과거 기준일을 기준으로 +1개월 계산
+            base_date = custom_start_date if custom_start_date else today
+            default_end_date = base_date + relativedelta(months=1)
+
+            adjust_future = st.checkbox("미래 기준일 수정", value=False, help="종료일을 수동으로 설정")
+
+            if adjust_future:
+                custom_end_date = st.date_input(
+                    "기준일 선택",
+                    value=default_end_date,
+                    help="이 날짜 이후의 예약은 관리대상"
+                )
+                st.caption(f"📍 {custom_end_date.strftime('%Y-%m-%d')} 이후는 관리대상")
+            else:
+                custom_end_date = default_end_date
+                st.info(f"📌 기본: {default_end_date.strftime('%Y-%m-%d')} 이후는 관리대상")
+
+        # 인정 기간 요약
+        st.markdown("---")
+        col_summary = st.columns(1)[0]
+        with col_summary:
+            start_str = custom_start_date.strftime('%Y년 %m월 %d일') if custom_start_date else today.strftime('%Y년 %m월 %d일')
+            end_str = custom_end_date.strftime('%Y년 %m월 %d일') if custom_end_date else default_end_date.strftime('%Y년 %m월 %d일')
+            st.success(f"✅ **허용 범위 (카운트 제외)**: {start_str} ~ {end_str}")
+
+            # 실제 기간 계산
+            if custom_start_date and custom_end_date:
+                days_diff = (custom_end_date - custom_start_date).days
+                st.caption(f"이 범위의 예약은 정상으로 간주하여 관리대상에서 제외합니다. (과거, 미래초과, 빈값만 카운트)")
+
+    st.markdown("---")
+
+    # 분석 시작
+    if uploaded_files:
+        st.info(f"📂 {len(uploaded_files)}개 파일이 선택되었습니다.")
+
+        if st.button("🚀 분석 시작", use_container_width=True, type="primary"):
+            with st.spinner("데이터 처리 중..."):
+                # 1. 파일 처리
+                combined_df, error = process_sales_files(uploaded_files, include_empty)
+
+                if error:
+                    st.error(f"❌ {error}")
+                    return
+
+                st.success(f"✅ 파일 통합 완료: 총 {len(combined_df):,}건")
+
+                # 2. 데이터 필터링
+                original_count = len(combined_df)
+                filtered_df, error = filter_sales_data(combined_df, include_empty)
+
+                if error:
+                    st.error(f"❌ {error}")
+                    return
+
+                # 중복 제거 및 필터링 정보 표시
+                final_count = len(filtered_df)
+                removed_count = original_count - final_count
+
+                if removed_count > 0:
+                    st.success(f"✅ 필터링 완료: {final_count:,}건 (등록된 상담사만, 중복 제거 {removed_count:,}건)")
+                else:
+                    st.success(f"✅ 필터링 완료: {final_count:,}건 (등록된 상담사만, 중복 없음)")
+
+                # 3. 예약일자 필터링 (테이블용만)
+                table_df = filtered_df
+                if filter_reservation:
+                    table_df, error, stats = filter_by_reservation_date(
+                        filtered_df,
+                        apply_filter=True,
+                        custom_start_date=custom_start_date,
+                        custom_end_date=custom_end_date
+                    )
+                    if error:
+                        st.error(f"❌ {error}")
+                        return
+                    if stats:
+                        st.success(f"✅ 예약일자 필터 적용 (허용범위: {stats['과거기준일']} ~ {stats['미래기준일']}): {stats['관리대상']}건 (빈값:{stats['빈값']}, 과거:{stats['과거']}, 미래초과:{stats['기준일초과']})")
+                    else:
+                        st.success(f"✅ 예약일자 필터 적용: {len(table_df)}건 (관리대상만)")
+
+                # 4. 집계 테이블 생성 (예약일자 필터 적용된 데이터로)
+                tables, error = create_aggregation_tables(table_df)
+
+                if error:
+                    st.error(f"❌ {error}")
+                    return
+
+                # 세션 상태에 저장
+                st.session_state['sales_tables'] = tables
+                st.session_state['sales_raw_data'] = filtered_df
+
+                st.success("✅ 집계 테이블 생성 완료!")
+                st.rerun()
+
+    # 결과 표시
+    if 'sales_tables' in st.session_state and 'sales_raw_data' in st.session_state:
+        st.markdown("---")
+        st.subheader("📊 분석 결과")
+
+        tables = st.session_state['sales_tables']
+        raw_data = st.session_state['sales_raw_data']
+
+        # 통계 정보
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("총 데이터", f"{len(raw_data):,}건")
+        with col2:
+            st.metric("상담사 수", f"{raw_data['상담사'].nunique()}명")
+        with col3:
+            st.metric("상담DB상태 종류", f"{raw_data['상담DB상태'].nunique()}개")
+
+        st.markdown("---")
+
+        # 테이블 표시
+        st.subheader("📋 집계 테이블")
+
+        # 탭으로 테이블 구분
+        tab_names = list(tables.keys())
+        tabs = st.tabs(tab_names)
+
+        for tab, (table_name, table_df) in zip(tabs, tables.items()):
+            with tab:
+                st.dataframe(
+                    table_df,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+                # CSV 다운로드 버튼
+                csv = table_df.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button(
+                    label=f"📥 {table_name} CSV 다운로드",
+                    data=csv,
+                    file_name=f"{table_name}_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+
+        st.markdown("---")
+
+        # 로우데이터 표시 (접기)
+        with st.expander("📄 로우데이터 보기 및 필터", expanded=False):
+            # _파일명 컬럼 제외
+            if '_파일명' in raw_data.columns:
+                base_display_data = raw_data.drop(columns=['_파일명'])
+            else:
+                base_display_data = raw_data
+
+            # 필터 옵션
+            st.markdown("##### 🔍 데이터 필터")
+
+            filter_cols = st.columns([2, 2, 2, 1])
+
+            # 상담사 필터
+            with filter_cols[0]:
+                available_consultants = ['전체'] + sorted(base_display_data['상담사'].unique().tolist())
+                selected_consultant = st.selectbox(
+                    "상담사",
+                    options=available_consultants,
+                    key="raw_data_consultant_filter"
+                )
+
+            # 상담DB상태 필터
+            with filter_cols[1]:
+                available_statuses = ['전체'] + sorted(base_display_data['상담DB상태'].unique().tolist())
+                selected_status = st.selectbox(
+                    "상담DB상태",
+                    options=available_statuses,
+                    key="raw_data_status_filter"
+                )
+
+            # 일반회차 캠페인 필터
+            with filter_cols[2]:
+                if '일반회차 캠페인' in base_display_data.columns:
+                    campaign_values = base_display_data['일반회차 캠페인'].fillna('(빈값)').unique().tolist()
+                    available_campaigns = ['전체'] + sorted(campaign_values)
+                    selected_campaign = st.selectbox(
+                        "일반회차 캠페인",
+                        options=available_campaigns,
+                        key="raw_data_campaign_filter"
+                    )
+                else:
+                    selected_campaign = '전체'
+
+            # 필터 초기화 버튼
+            with filter_cols[3]:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("🔄 초기화", key="reset_raw_filters"):
+                    st.rerun()
+
+            # 텍스트 검색
+            search_text = st.text_input(
+                "🔎 전체 검색 (모든 컬럼에서 검색)",
+                placeholder="검색어를 입력하세요...",
+                key="raw_data_search"
+            )
+
+            # 필터 적용
+            filtered_data = base_display_data.copy()
+
+            if selected_consultant != '전체':
+                filtered_data = filtered_data[filtered_data['상담사'] == selected_consultant]
+
+            if selected_status != '전체':
+                filtered_data = filtered_data[filtered_data['상담DB상태'] == selected_status]
+
+            if selected_campaign != '전체' and '일반회차 캠페인' in filtered_data.columns:
+                if selected_campaign == '(빈값)':
+                    filtered_data = filtered_data[filtered_data['일반회차 캠페인'].isna()]
+                else:
+                    filtered_data = filtered_data[filtered_data['일반회차 캠페인'] == selected_campaign]
+
+            if search_text:
+                # 모든 컬럼에서 텍스트 검색 (대소문자 구분 없이)
+                mask = filtered_data.astype(str).apply(
+                    lambda x: x.str.contains(search_text, case=False, na=False)
+                ).any(axis=1)
+                filtered_data = filtered_data[mask]
+
+            # NaT와 NaN을 빈 문자열로 변환 (표시용)
+            display_filtered_data = filtered_data.copy()
+
+            # 모든 NaT, NaN, None을 빈 문자열로 완전히 치환
+            for col in display_filtered_data.columns:
+                display_filtered_data[col] = display_filtered_data[col].astype(str).replace('NaT', '').replace('nan', '').replace('None', '').replace('<NA>', '')
+
+            # 컬럼 순서 재정렬 (핀 고정 컬럼을 맨 앞으로)
+            pin_columns = ['번호', '상담주문번호', '상담사', '상담DB상태', '예약 일자', '일반회차 캠페인']
+            existing_pin_cols = [col for col in pin_columns if col in display_filtered_data.columns]
+            other_cols = [col for col in display_filtered_data.columns if col not in pin_columns]
+            new_column_order = existing_pin_cols + other_cols
+            display_filtered_data = display_filtered_data[new_column_order]
+
+            # 필터링 결과 표시
+            st.info(f"📊 전체 {len(base_display_data):,}건 중 {len(display_filtered_data):,}건 표시")
+
+            st.markdown("---")
+
+            # 데이터가 있을 때만 테이블 표시
+            if len(display_filtered_data) > 0:
+                # 데이터 테이블 (AgGrid - Excel처럼 컬럼별 필터, 정렬 가능)
+                gb = GridOptionsBuilder.from_dataframe(display_filtered_data)
+
+                # 기본 컬럼 설정 (성능 최적화)
+                gb.configure_default_column(
+                    resizable=True,
+                    filterable=True,
+                    sortable=True,
+                    editable=False,
+                    wrapText=False,
+                    autoHeight=False,
+                    width=150,
+                    minWidth=100,
+                    suppressSizeToFit=False
+                )
+
+                # 주요 컬럼 핀 고정 (이미 순서 정렬됨)
+                pin_column_widths = {
+                    '번호': 100,
+                    '상담주문번호': 200,
+                    '상담사': 140,
+                    '상담DB상태': 150,
+                    '예약 일자': 160,
+                    '일반회차 캠페인': 220
+                }
+
+                for idx, col in enumerate(existing_pin_cols):
+                    width = pin_column_widths.get(col, 180)
                     gb.configure_column(
                         col,
-                        type=["dateColumnFilter", "customDateTimeFormat"],
-                        custom_format="%Y-%m-%d",  # 날짜만 표시
-                        valueFormatter='value ? value.substr(0, 10) : ""',  # JavaScript 포맷터로 날짜만 추출
-                        pivot=True
+                        pinned='left',
+                        width=width,
+                        minWidth=width,
+                        maxWidth=width * 2,
+                        lockPosition=True,
+                        resizable=True,
+                        suppressSizeToFit=False
                     )
 
-            # 시간 컬럼의 경우 별도로 처리
-            time_columns = [col for col in df.columns if pd.api.types.is_datetime64_any_dtype(df[col]) and 'time' in col.lower()]
-            for col in time_columns:
-                gb.configure_column(
-                    col,
-                    type=["dateColumnFilter", "customDateTimeFormat"],
-                    custom_format="%H:%M:%S",  # 시간만 표시
-                    valueFormatter='value ? value.substr(11, 8) : ""',  # JavaScript 포맷터로 시간만 추출
-                    pivot=True
+                # 페이지네이션 비활성화 (스크롤로 모든 데이터 보기)
+                gb.configure_pagination(enabled=False)
+
+                # 그리드 옵션 (성능 최적화)
+                gb.configure_grid_options(
+                    domLayout='normal',
+                    suppressColumnVirtualisation=False,
+                    suppressRowVirtualisation=False,
+                    rowBuffer=10,
+                    animateRows=False,
+                    enableCellTextSelection=True
                 )
-            
-            # 그룹화, 집계 기능 설정
-            gb.configure_default_column(groupable=True, value=True, enableRowGroup=True, aggFunc='sum', editable=True)
-            gridOptions = gb.build()
-            
-            # 데이터 그리드 표시
-            grid_response = AgGrid(
-                df,
-                gridOptions=gridOptions,
-                update_mode=GridUpdateMode.MODEL_CHANGED,
-                height=400,
-                enable_enterprise_modules=True,
-                allow_unsafe_jscode=True
-            )
-            
-            # 데이터 필터링 UI (접을 수 있는 섹션)
-            with st.expander("데이터 필터링", expanded=False):
-                # 필터링할 컬럼 선택
-                st.markdown("#### 필터링할 컬럼을 선택하세요")
-                cols = df.columns.tolist()
-                filter_cols = st.multiselect(
-                    "필터링할 컬럼 선택",
-                    options=cols,
-                    default=[]
+
+                # 사이드바
+                gb.configure_side_bar(
+                    filters_panel=True,
+                    columns_panel=True
                 )
-                
-                filtered_df = df.copy()
-                
-                if filter_cols:
-                    # 선택된 각 컬럼에 대한 필터 생성
-                    for col in filter_cols:
-                        st.markdown(f'### {col}')
-                        unique_values = df[col].unique().tolist()
-                        
-                        # 검색 기능 개선 - 검색 버튼 추가
-                        search_col1, search_col2 = st.columns([3, 1])
-                        with search_col1:
-                            search_term = st.text_input(f"{col} 검색", placeholder="검색어 입력...", key=f"search_{col}")
-                        with search_col2:
-                            st.markdown("<br>", unsafe_allow_html=True)  # 간격 조정
-                            search_button = st.button("검색", key=f"search_btn_{col}")
 
-                        # 검색어를 포함하는 값만 필터링
-                        if search_term:
-                            filtered_values = [val for val in unique_values if str(search_term).lower() in str(val).lower()]
-                            st.write(f"'{search_term}'을(를) 포함한 {len(filtered_values)}개의 항목이 표시됨")
-                        else:
-                            filtered_values = unique_values
-                        
-                        # 전체 선택/해제 옵션
-                        col1, col2 = st.columns([1, 3])
-                        
-                        with col1:
-                            select_all = st.checkbox(
-                                f"전체 선택", 
-                                value=True,
-                                key=f"all_{col}"
-                            )
-                        
-                        with col2:
-                            # 선택된 개수 표시
-                            selected_count = len(filtered_values) if select_all else 0
-                            st.write(f"선택됨: {selected_count}/{len(filtered_values)}")
-                        
-                        selected_values = []
+                # 행 선택 (간단하게)
+                gb.configure_selection(
+                    selection_mode='multiple',
+                    use_checkbox=False
+                )
 
-                        # 화면 크기에 따라 컬럼 수 결정
-                        num_columns = 4  # 기본값으로 4열 사용
+                grid_options = gb.build()
 
-                        # 그리드 형태로 체크박스 배치
-                        grid_cols = st.columns(num_columns)
-                        for i, val in enumerate(filtered_values):
-                            val_str = str(val) if not pd.isna(val) else "빈 값"
-                            
-                            # 각 열에 체크박스 배치
-                            with grid_cols[i % num_columns]:
-                                is_checked = st.checkbox(
-                                    val_str, 
-                                    value=select_all,
-                                    key=f"cb_{col}_{val}"
-                                )
-                                
-                                if is_checked:
-                                    selected_values.append(val)
-                        
-                        # 선택된 값으로 필터링 (버튼 없이 즉시 적용)
-                        filtered_df = filtered_df[filtered_df[col].isin(selected_values)]
-                    
-                    # 필터가 적용된 데이터프레임 저장
-                    st.session_state.filtered_df = filtered_df
-                    
-                    # 필터링된 데이터 정보 표시
-                    st.write(f"현재 {len(filtered_df)}개의 레코드가 필터링되었습니다.")
-                else:
-                    # 필터가 적용되지 않은 경우 원본 데이터 사용
-                    filtered_df = df
-                    st.session_state.filtered_df = df
-            
-            # 분석 결과 표시
-            st.subheader("분석 결과")
-            
-            # 현재 필터링된 데이터 기준으로 분석
-            current_df = st.session_state.filtered_df if 'filtered_df' in st.session_state else df
-            
-            # 분석 데이터 생성
-            analysis_df, analysis_error = analyze_data(current_df)
-            st.session_state.analysis_df = analysis_df
-            
-            if analysis_error:
-                st.error(analysis_error)
+                AgGrid(
+                    display_filtered_data,
+                    gridOptions=grid_options,
+                    height=600,
+                    theme='streamlit',
+                    update_mode=GridUpdateMode.NO_UPDATE,
+                    data_return_mode=DataReturnMode.AS_INPUT,
+                    fit_columns_on_grid_load=False,
+                    allow_unsafe_jscode=False,
+                    enable_enterprise_modules=False,
+                    reload_data=False
+                )
             else:
-                # 데이터 요약 정보 표시
-                st.write(f"{len(current_df)}개의 레코드로 분석되었습니다.")
-                
-                # 분석 결과 테이블 표시
-                analysis_display = analysis_df.copy()
-                
-                # 데이터 포맷팅 - 가독성 개선
-                if '매출금액_VAT제외_포맷' in analysis_display.columns:
-                    analysis_display.rename(columns={'매출금액_VAT제외_포맷': '매출금액(VAT제외)'}, inplace=True)
-                    analysis_display.drop('매출금액_VAT제외', axis=1, inplace=True)
-                
-                # 임시 분석용 컬럼 제거
-                if '매출금액_숫자' in analysis_display.columns:
-                    analysis_display.drop('매출금액_숫자', axis=1, inplace=True)
-                
-                # 분석 결과 데이터프레임 표시
-                st.dataframe(analysis_display)
-                
-                # 클립보드 복사 기능 개선
-                st.markdown("### 분석 결과 복사")
-                st.markdown("아래 버튼을 클릭하여 분석 결과를 클립보드에 복사할 수 있습니다.")
+                st.warning("⚠️ 필터 조건에 맞는 데이터가 없습니다.")
 
-                # 복사할 텍스트 생성 (포맷 개선)
-                copy_text = "품목명\t승인건수\t매출금액(VAT제외)\n"  # 헤더 추가
-                for _, row in analysis_display.iterrows():
-                    copy_text += f"{row['품목명']}\t{row['승인건수']}\t{row['매출금액(VAT제외)']}\n"
-
-                # 복사 버튼 UI
-                st.markdown(copy_to_clipboard(copy_text), unsafe_allow_html=True)
-                st.markdown(COPY_BUTTON_HTML, unsafe_allow_html=True)
-                st.markdown(COPY_SUCCESS_STYLE, unsafe_allow_html=True)
-                
-                # 시각화와 다운로드 탭
-                visualization_tab, custom_analysis_tab, download_tab = st.tabs(["시각화", "커스텀 분석", "다운로드"])
-                
-                with visualization_tab:
-                    col1, col2 = st.columns(2)
-                    
-                    # 매출금액 숫자 컬럼 추가 (시각화 용도)
-                    if '매출금액_숫자' not in analysis_df.columns:
-                        analysis_df['매출금액_숫자'] = analysis_df['매출금액_VAT제외']
-                    
-                    with col1:
-                        # 승인건수 막대 그래프
-                        fig = px.bar(
-                            analysis_df, 
-                            x='품목명', 
-                            y='승인건수',
-                            text='승인건수',
-                            title='품목별 승인건수',
-                            color='품목명',
-                            color_discrete_sequence=px.colors.qualitative.G10
-                        )
-                        fig.update_layout(
-                            height=400,
-                            xaxis_title="품목명",
-                            yaxis_title="승인건수",
-                            font=dict(size=12)
-                        )
-                        fig.update_traces(texttemplate='%{text:,}', textposition='outside')
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    with col2:
-                        # 매출액 파이 차트
-                        fig2 = px.pie(
-                            analysis_df, 
-                            values='매출금액_숫자', 
-                            names='품목명',
-                            title='품목별 매출금액(VAT제외) 비율',
-                            color_discrete_sequence=px.colors.qualitative.G10
-                        )
-                        fig2.update_layout(
-                            height=400,
-                            font=dict(size=12)
-                        )
-                        fig2.update_traces(texttemplate='%{percent:.1%}', textinfo='label+percent')
-                        st.plotly_chart(fig2, use_container_width=True)
-                    
-                    # 종합 대시보드
-                    st.subheader("종합 대시보드")
-                    
-                    fig3 = go.Figure()
-                    
-                    fig3.add_trace(go.Bar(
-                        x=analysis_df['품목명'],
-                        y=analysis_df['승인건수'],
-                        name='승인건수',
-                        marker_color='indianred',
-                        text=analysis_df['승인건수'],
-                        texttemplate='%{text:,}',
-                        textposition='outside'
-                    ))
-                    
-                    fig3.add_trace(go.Scatter(
-                        x=analysis_df['품목명'],
-                        y=analysis_df['매출금액_숫자'],
-                        mode='lines+markers',
-                        name='매출금액(VAT제외)',
-                        marker_color='royalblue',
-                        yaxis='y2',
-                        text=analysis_df['매출금액_숫자'].apply(lambda x: f"{x:,.0f}"),
-                        textposition='top center'
-                    ))
-                    
-                    fig3.update_layout(
-                        title='품목별 승인건수 및 매출금액',
-                        xaxis=dict(title='품목명', tickfont=dict(size=12)),
-                        yaxis=dict(title='승인건수', side='left', tickformat=','),
-                        yaxis2=dict(title='매출금액(VAT제외)', side='right', overlaying='y', tickformat=','),
-                        legend=dict(x=0.1, y=1.1, orientation='h'),
-                        height=500,
-                        font=dict(size=12)
-                    )
-                    
-                    st.plotly_chart(fig3, use_container_width=True)
-                
-                with custom_analysis_tab:
-                    # 피벗 테이블 분석 UI는 UI 복잡성으로 인해 여기에 포함
-                    # sales_pivot_ui.py로 분리할 수도 있음
-                    display_pivot_analysis(current_df)
-                
-                with download_tab:
-                    # 엑셀 다운로드 기능
-                    st.markdown("### 엑셀 파일 다운로드")
-                    st.markdown(DOWNLOAD_BUTTON_STYLE, unsafe_allow_html=True)
-                    st.markdown(get_table_download_link(current_df, analysis_df), unsafe_allow_html=True)
-                    
-                    # 다운로드 가이드
-                    st.markdown(DOWNLOAD_GUIDE_MARKDOWN)
-                    st.markdown(DOWNLOAD_GUIDE_MARKDOWN)
-    else:
-        # 파일 업로드 전 안내 화면
-        st.info("통합 계약 내역 엑셀 파일을 업로드하면 데이터 분석이 시작됩니다.")
-        
-        # 사용 가이드
-        st.markdown(USAGE_GUIDE_MARKDOWN)
-
-def display_pivot_analysis(df: pd.DataFrame):
-    """피벗 테이블 분석 UI 표시"""
-    st.subheader("피벗 테이블 분석")
-    
-    # 좌우 레이아웃으로 구성
-    config_col, result_col = st.columns([1, 2])
-    
-    with config_col:
-        st.markdown("### 피벗 테이블 필드")
-        
-        # 사용 가능한 필드 분류
-        all_fields = df.columns.tolist()
-        dimension_fields = [col for col in all_fields 
-                   if not pd.api.types.is_numeric_dtype(df[col])]
-        measure_fields = [col for col in all_fields 
-                   if pd.api.types.is_numeric_dtype(df[col])]
-        
-        # 필터 영역 추가
-        st.markdown("#### 필터 필드")
-        filter_fields = st.multiselect(
-            "필터로 사용할 필드",
-            options=all_fields,
-            default=[]
-        )
-        
-        # 필터 설정 UI
-        filtered_data = df.copy()
-        
-        if filter_fields:
-            st.markdown("##### 필터 설정:")
-            
-            for field in filter_fields:
-                st.markdown(f"**{field}** 필터:")
-                
-                # 필드 타입에 따라 다른 필터 UI 제공
-                if pd.api.types.is_datetime64_any_dtype(filtered_data[field]):
-                    # 날짜 필드인 경우 날짜 범위 선택
-                    min_date = filtered_data[field].min().date()
-                    max_date = filtered_data[field].max().date()
-                    
-                    date_col1, date_col2 = st.columns(2)
-                    with date_col1:
-                        start_date = st.date_input(
-                            "시작일",
-                            value=min_date,
-                            min_value=min_date,
-                            max_value=max_date,
-                            key=f"pivot_start_date_{field}"
-                        )
-                    with date_col2:
-                        end_date = st.date_input(
-                            "종료일",
-                            value=max_date,
-                            min_value=min_date,
-                            max_value=max_date,
-                            key=f"pivot_end_date_{field}"
-                        )
-                    
-                    # 필터 적용
-                    filtered_data = filtered_data[(filtered_data[field].dt.date >= start_date) & 
-                                                (filtered_data[field].dt.date <= end_date)]
-                    
-                elif pd.api.types.is_numeric_dtype(filtered_data[field]):
-                    # 숫자 필드인 경우 슬라이더
-                    min_val = float(filtered_data[field].min())
-                    max_val = float(filtered_data[field].max())
-                    
-                    value_range = st.slider(
-                        "값 범위",
-                        min_value=min_val,
-                        max_value=max_val,
-                        value=(min_val, max_val),
-                        key=f"pivot_range_{field}"
-                    )
-                    
-                    # 필터 적용
-                    filtered_data = filtered_data[(filtered_data[field] >= value_range[0]) & 
-                                                (filtered_data[field] <= value_range[1])]
-                    
-                else:
-                    # 카테고리/문자열 필드인 경우 다중 선택
-                    unique_values = filtered_data[field].dropna().unique()
-                    
-                    # 전체 선택/해제 옵션
-                    select_all = st.checkbox(
-                        "전체 선택",
-                        value=True,
-                        key=f"pivot_all_{field}"
-                    )
-                    
-                    if select_all:
-                        selected_values = list(unique_values)
-                    else:
-                        selected_values = st.multiselect(
-                            "값 선택",
-                            options=unique_values,
-                            default=list(unique_values),
-                            key=f"pivot_values_{field}"
-                        )
-                    
-                    # 필터 적용
-                    filtered_data = filtered_data[filtered_data[field].isin(selected_values)]
-            
-            # 필터 적용 후 레코드 수 표시
-            st.write(f"필터 적용 후 {len(filtered_data)}개의 레코드가 선택되었습니다.")
-        
-        # 행 영역 (계층적 구조 지원)
-        st.markdown("#### 행 필드")
-        row_fields = st.multiselect(
-            "행으로 사용할 필드 (순서대로 계층 구조가 적용됩니다)",
-            options=dimension_fields,
-            default=[]
-        )
-        
-        # 열 영역
-        st.markdown("#### 열 필드")
-        column_fields = st.multiselect(
-            "열로 사용할 필드",
-            options=dimension_fields,
-            default=[]
-        )
-        
-        # 값 영역 (여러 값 지원)
-        st.markdown("#### 값 필드")
-        
-        # 세션 상태로 값 필드 관리
-        if 'value_fields' not in st.session_state:
-            st.session_state.value_fields = []
-            st.session_state.agg_functions = []
-        
-        # 필드와 집계 함수 선택 UI
-        new_value_col1, new_value_col2, new_value_col3 = st.columns([2, 2, 1])
-        
-        with new_value_col1:
-            new_value_field = st.selectbox(
-                "값 필드",
-                options=measure_fields,
-                index=measure_fields.index('매출금액(VAT제외)') if '매출금액(VAT제외)' in measure_fields else 0
+            # CSV 다운로드 (필터링된 데이터)
+            csv = filtered_data.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button(
+                label=f"📥 필터링된 데이터 CSV 다운로드 ({len(filtered_data)}건)",
+                data=csv,
+                file_name=f"로우데이터_필터_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                key="download_filtered_raw"
             )
-        
-        with new_value_col2:
-            new_agg_function = st.selectbox(
-                "집계 함수",
-                options=["합계", "평균", "최댓값", "최솟값", "개수"],
-                index=0
-            )
-        
-        with new_value_col3:
-            st.write(" ")
-            st.write(" ")
-            if st.button("추가", key="add_value"):
-                # 중복 검사
-                field_agg_pair = (new_value_field, new_agg_function)
-                if field_agg_pair not in zip(st.session_state.value_fields, st.session_state.agg_functions):
-                    st.session_state.value_fields.append(new_value_field)
-                    st.session_state.agg_functions.append(new_agg_function)
-                    st.rerun()
-        
-        # 추가된 값 필드 목록
-        if st.session_state.value_fields:
-            st.markdown("##### 추가된 값 필드:")
-            for i, (field, agg) in enumerate(zip(st.session_state.value_fields, st.session_state.agg_functions)):
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    st.markdown(f"**{i+1}.** {agg}: {field}")
-                with col2:
-                    if st.button("삭제", key=f"remove_{i}"):
-                        st.session_state.value_fields.pop(i)
-                        st.session_state.agg_functions.pop(i)
-                        st.rerun()
-        else:
-            st.info("값 필드를 추가해주세요.")
-        
-        # 추가 옵션
-        st.markdown("#### 추가 옵션")
-        show_totals = st.checkbox("합계 표시", value=True)
-        
-    with result_col:
-        # 피벗 테이블 결과 영역
-        st.markdown("### 피벗 테이블 결과")
-        
-        # 필드가 선택되었는지 확인
-        if not row_fields and not column_fields:
-            st.info("분석을 시작하려면 행 또는 열 필드를 선택하세요.")
-        elif not st.session_state.value_fields:
-            st.info("분석을 시작하려면 값 필드를 추가하세요.")
-        else:
-            try:
-                # 집계 함수 매핑
-                agg_map = {
-                    "합계": "sum",
-                    "평균": "mean", 
-                    "최댓값": "max",
-                    "최솟값": "min",
-                    "개수": "count"
+
+        st.markdown("---")
+
+        # 엑셀 다운로드
+        st.subheader("📥 엑셀 파일 다운로드")
+
+        with st.spinner("엑셀 파일 생성 중..."):
+            excel_data = create_excel_output(tables, raw_data)
+
+            if excel_data:
+                b64 = base64.b64encode(excel_data).decode()
+                filename = f"매출분석_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                href = f'<a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="{filename}" class="download-button">📥 엑셀 다운로드 (2시트)</a>'
+
+                st.markdown("""
+                <style>
+                .download-button {
+                    display: inline-block;
+                    padding: 0.5rem 1rem;
+                    background-color: #4CAF50;
+                    color: white;
+                    text-decoration: none;
+                    border-radius: 0.25rem;
+                    font-weight: bold;
+                    text-align: center;
                 }
-                
-                # 집계 함수 딕셔너리 생성
-                agg_dict = {}
-                for field, agg in zip(st.session_state.value_fields, st.session_state.agg_functions):
-                    agg_dict[field] = agg_map[agg]
-                
-                # 기존 pivot_table 사용
-                pivot = pd.pivot_table(
-                    filtered_data,  # 필터링된 데이터 사용
-                    values=st.session_state.value_fields,
-                    index=row_fields,
-                    columns=column_fields,
-                    aggfunc=agg_dict,
-                    margins=show_totals,
-                    margins_name="총합계"
-                )
-                
-                # 결과 표시 (포맷팅 적용)
-                st.dataframe(pivot.style.format("{:,.0f}"), height=600)
-                
-                # 다운로드 버튼
-                csv = pivot.to_csv()
-                st.download_button(
-                    label="CSV 다운로드",
-                    data=csv,
-                    file_name="pivot_table.csv",
-                    mime="text/csv",
-                )
-                
-            except Exception as e:
-                st.error(f"피벗 테이블 생성 중 오류가 발생했습니다: {str(e)}")
-                st.info("행과 열 필드 구성을 확인해보세요. 데이터에 따라 일부 조합이 작동하지 않을 수 있습니다.")
+                .download-button:hover {
+                    background-color: #45a049;
+                    color: white;
+                }
+                </style>
+                """, unsafe_allow_html=True)
+
+                st.markdown(href, unsafe_allow_html=True)
+
+                st.info("""
+                **엑셀 파일 구성:**
+                - 시트1: 집계 테이블 (메인테이블 + 개별 테이블)
+                - 시트2: 로우데이터 (등록된 상담사 필터링된 원본 데이터)
+
+                **참고:** 집계 테이블은 예약일자 필터가 적용되지만, 로우데이터는 상담사 필터만 적용됩니다.
+                """)
+            else:
+                st.error("엑셀 파일 생성에 실패했습니다.")
+
+        # 초기화 버튼
+        if st.button("🔄 초기화", use_container_width=True):
+            if 'sales_tables' in st.session_state:
+                del st.session_state['sales_tables']
+            if 'sales_raw_data' in st.session_state:
+                del st.session_state['sales_raw_data']
+            st.rerun()
+
+    else:
+        # 파일 미업로드 시 안내
+        if not uploaded_files:
+            st.info("📂 분석할 엑셀 파일을 업로드해주세요.")
+        else:
+            st.info("🚀 '분석 시작' 버튼을 클릭하여 분석을 시작하세요.")

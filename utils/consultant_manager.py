@@ -11,6 +11,25 @@ from typing import Dict, List, Optional
 # 기본 JSON 파일 경로
 DEFAULT_JSON_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "consultants.json")
 
+# 팀명 ↔ 파트명 매핑 (로직에서는 파트명 사용)
+TEAM_TO_PART_MAP = {
+    "CRM팀": "CRM파트",
+    "온라인팀": "온라인파트"
+}
+
+PART_TO_TEAM_MAP = {
+    "CRM파트": "CRM팀",
+    "온라인파트": "온라인팀"
+}
+
+def get_part_name(team_name: str) -> str:
+    """팀명을 파트명으로 변환"""
+    return TEAM_TO_PART_MAP.get(team_name, team_name)
+
+def get_team_name(part_name: str) -> str:
+    """파트명을 팀명으로 변환"""
+    return PART_TO_TEAM_MAP.get(part_name, part_name)
+
 def load_consultants(json_path: str = DEFAULT_JSON_PATH) -> Dict[str, List[str]]:
     """
     JSON 파일에서 상담사 목록을 로드합니다.
@@ -149,18 +168,75 @@ def get_consultants_by_team(team: str, json_path: str = DEFAULT_JSON_PATH) -> Li
 def get_team_by_consultant(name: str, json_path: str = DEFAULT_JSON_PATH) -> Optional[str]:
     """
     상담사가 속한 팀 이름을 가져옵니다.
-    
+
     Args:
         name: 상담사 이름
         json_path: JSON 파일 경로
-        
+
     Returns:
         Optional[str]: 팀 이름 또는 None (상담사가 없는 경우)
     """
     consultants = load_consultants(json_path)
-    
+
     for team, members in consultants.items():
         if name in members:
             return team
-    
+
     return None
+
+def add_team(team_name: str, json_path: str = DEFAULT_JSON_PATH) -> bool:
+    """
+    새로운 팀을 추가합니다.
+
+    Args:
+        team_name: 추가할 팀 이름
+        json_path: JSON 파일 경로
+
+    Returns:
+        bool: 추가 성공 여부
+    """
+    consultants = load_consultants(json_path)
+
+    # 이미 존재하는 팀인지 확인
+    if team_name in consultants:
+        return False
+
+    consultants[team_name] = []
+    return save_consultants(consultants, json_path)
+
+def remove_team(team_name: str, json_path: str = DEFAULT_JSON_PATH) -> bool:
+    """
+    팀을 제거합니다. (팀에 소속된 상담사가 없어야 함)
+
+    Args:
+        team_name: 제거할 팀 이름
+        json_path: JSON 파일 경로
+
+    Returns:
+        bool: 제거 성공 여부
+    """
+    consultants = load_consultants(json_path)
+
+    # 팀이 없으면 실패
+    if team_name not in consultants:
+        return False
+
+    # 팀에 상담사가 있으면 실패
+    if len(consultants[team_name]) > 0:
+        return False
+
+    del consultants[team_name]
+    return save_consultants(consultants, json_path)
+
+def get_all_teams(json_path: str = DEFAULT_JSON_PATH) -> List[str]:
+    """
+    모든 팀 목록을 가져옵니다.
+
+    Args:
+        json_path: JSON 파일 경로
+
+    Returns:
+        List[str]: 팀 이름 목록
+    """
+    consultants = load_consultants(json_path)
+    return list(consultants.keys())

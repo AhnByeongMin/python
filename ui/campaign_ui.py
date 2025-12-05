@@ -112,17 +112,19 @@ def show():
     st.title("📢캠페인/정규분배 현황")
     st.markdown('<p>이 도구는 다수의 엑셀 파일을 분석하여 캠페인/정규분배 현황을 보여줍니다. 파일을 업로드하고 분석 버튼을 클릭하면 결과를 확인할 수 있습니다.</p>', unsafe_allow_html=True)
     
-    # 세션 상태 초기화
-    if 'campaign_files' not in st.session_state:
-        st.session_state.campaign_files = []
-    if 'campaign_results' not in st.session_state:
-        st.session_state.campaign_results = None
-    if 'cleaned_data' not in st.session_state:
-        st.session_state.cleaned_data = None
-    if 'consultant_results' not in st.session_state:
-        st.session_state.consultant_results = None
-    if 'analysis_complete' not in st.session_state:
-        st.session_state.analysis_complete = False
+    # 세션 상태 초기화 (딕셔너리 방식)
+    session_defaults = {
+        'campaign_files': [],
+        'campaign_results': None,
+        'cleaned_data': None,
+        'consultant_results': None,
+        'analysis_complete': False,
+        'processing': False
+    }
+
+    for key, default_value in session_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
     
     # 파일 업로드 UI
     st.subheader("엑셀 파일 업로드")
@@ -151,38 +153,52 @@ def show():
     
     # 분석 기능
     if analyze_button and st.session_state.campaign_files:
-        # 진행 상태 표시
-        with st.spinner('파일 분석 중...'):
-            start_time = time.time()
+        if not st.session_state.processing:
+            st.session_state.processing = True
 
-            # 캠페인 분석 실행
-            results, cleaned_data, before_count, after_count = process_campaign_files(st.session_state.campaign_files)
-            st.session_state.campaign_results = results
-            st.session_state.cleaned_data = cleaned_data
-            
-            # 상담사별 분석 실행 (상담DB상태가 "신규"인 데이터가 있는 경우에만)
-            if cleaned_data is not None:
-                consultant_results, error = process_consultant_data(cleaned_data)
-                if error:
-                    if "상담DB상태가 '신규'인 데이터가 없습니다" not in error:
-                        st.warning(f"상담사별 분석: {error}")
-                st.session_state.consultant_results = consultant_results
-            
-            # 분석 완료 플래그 설정
-            st.session_state.analysis_complete = True
+            # 진행 상황 표시를 위한 placeholder
+            progress_placeholder = st.empty()
 
-            # 분석 소요 시간 및 중복 제거 정보 표시
-            end_time = time.time()
+            try:
+                # 진행 상태 표시
+                progress_placeholder.info('🔄 파일 분석 중...')
+                start_time = time.time()
 
-            # 중복 제거 메시지 생성
-            if before_count > 0 and after_count > 0:
-                removed_count = before_count - after_count
-                if removed_count > 0:
-                    st.success(f"✅ 분석 완료! 중복 제거: {removed_count}건 (원본: {before_count}건 → 최종: {after_count}건) | 소요 시간: {end_time - start_time:.2f}초")
+                # 캠페인 분석 실행
+                results, cleaned_data, before_count, after_count = process_campaign_files(st.session_state.campaign_files)
+                st.session_state.campaign_results = results
+                st.session_state.cleaned_data = cleaned_data
+
+                # 상담사별 분석 실행 (상담DB상태가 "신규"인 데이터가 있는 경우에만)
+                if cleaned_data is not None:
+                    progress_placeholder.info('🔄 상담사별 분석 중...')
+                    consultant_results, error = process_consultant_data(cleaned_data)
+                    if error:
+                        if "상담DB상태가 '신규'인 데이터가 없습니다" not in error:
+                            st.warning(f"상담사별 분석: {error}")
+                    st.session_state.consultant_results = consultant_results
+
+                # 분석 완료 플래그 설정
+                st.session_state.analysis_complete = True
+                st.session_state.processing = False
+
+                # 분석 소요 시간 및 중복 제거 정보 표시
+                end_time = time.time()
+
+                # 중복 제거 메시지 생성
+                if before_count > 0 and after_count > 0:
+                    removed_count = before_count - after_count
+                    if removed_count > 0:
+                        progress_placeholder.success(f"✅ 분석 완료! 중복 제거: {removed_count}건 (원본: {before_count}건 → 최종: {after_count}건) | 소요 시간: {end_time - start_time:.2f}초")
+                    else:
+                        progress_placeholder.success(f"✅ 분석 완료! 중복 없음 (총 {after_count}건) | 소요 시간: {end_time - start_time:.2f}초")
                 else:
-                    st.success(f"✅ 분석 완료! 중복 없음 (총 {after_count}건) | 소요 시간: {end_time - start_time:.2f}초")
-            else:
-                st.info(f"분석 완료 (소요 시간: {end_time - start_time:.2f}초)")
+                    progress_placeholder.info(f"분석 완료 (소요 시간: {end_time - start_time:.2f}초)")
+
+            except Exception as e:
+                st.error(f"❌ 분석 중 오류 발생: {str(e)}")
+                st.session_state.processing = False
+                progress_placeholder.empty()
     
     # 분석 결과 표시 (분석이 완료된 경우에만)
     if st.session_state.analysis_complete:

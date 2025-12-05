@@ -130,71 +130,103 @@ def show():
 
     st.markdown("---")
 
+    # 세션 상태 초기화 (딕셔너리 방식)
+    session_defaults = {
+        'sales_tables': None,
+        'sales_raw_data': None,
+        'processing': False
+    }
+
+    for key, default_value in session_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
+
     # 분석 시작
     if uploaded_files:
         st.info(f"📂 {len(uploaded_files)}개 파일이 선택되었습니다.")
 
         if st.button("🚀 분석 시작", use_container_width=True, type="primary"):
-            with st.spinner("데이터 처리 중..."):
-                # 1. 파일 처리
-                combined_df, error = process_sales_files(uploaded_files, include_empty)
+            if not st.session_state.processing:
+                st.session_state.processing = True
 
-                if error:
-                    st.error(f"❌ {error}")
-                    return
+                # 진행 상황 표시를 위한 placeholder
+                progress_placeholder = st.empty()
 
-                st.success(f"✅ 파일 통합 완료: 총 {len(combined_df):,}건")
+                try:
+                    # 1. 파일 처리
+                    progress_placeholder.info("🔄 파일 처리 중...")
+                    combined_df, error = process_sales_files(uploaded_files, include_empty)
 
-                # 2. 데이터 필터링
-                original_count = len(combined_df)
-                filtered_df, error = filter_sales_data(combined_df, include_empty)
-
-                if error:
-                    st.error(f"❌ {error}")
-                    return
-
-                # 중복 제거 및 필터링 정보 표시
-                final_count = len(filtered_df)
-                removed_count = original_count - final_count
-
-                if removed_count > 0:
-                    st.success(f"✅ 필터링 완료: {final_count:,}건 (등록된 상담사만, 중복 제거 {removed_count:,}건)")
-                else:
-                    st.success(f"✅ 필터링 완료: {final_count:,}건 (등록된 상담사만, 중복 없음)")
-
-                # 3. 예약일자 필터링 (테이블용만)
-                table_df = filtered_df
-                if filter_reservation:
-                    table_df, error, stats = filter_by_reservation_date(
-                        filtered_df,
-                        apply_filter=True,
-                        custom_start_date=custom_start_date,
-                        custom_end_date=custom_end_date
-                    )
                     if error:
                         st.error(f"❌ {error}")
+                        st.session_state.processing = False
                         return
-                    if stats:
-                        st.success(f"✅ 예약일자 필터 적용 (허용범위: {stats['과거기준일']} ~ {stats['미래기준일']}): {stats['관리대상']}건 (빈값:{stats['빈값']}, 과거:{stats['과거']}, 미래초과:{stats['기준일초과']})")
+
+                    progress_placeholder.info(f"✅ 파일 통합 완료: 총 {len(combined_df):,}건")
+
+                    # 2. 데이터 필터링
+                    progress_placeholder.info("🔄 데이터 필터링 중...")
+                    original_count = len(combined_df)
+                    filtered_df, error = filter_sales_data(combined_df, include_empty)
+
+                    if error:
+                        st.error(f"❌ {error}")
+                        st.session_state.processing = False
+                        return
+
+                    # 중복 제거 및 필터링 정보 표시
+                    final_count = len(filtered_df)
+                    removed_count = original_count - final_count
+
+                    if removed_count > 0:
+                        progress_placeholder.info(f"✅ 필터링 완료: {final_count:,}건 (등록된 상담사만, 중복 제거 {removed_count:,}건)")
                     else:
-                        st.success(f"✅ 예약일자 필터 적용: {len(table_df)}건 (관리대상만)")
+                        progress_placeholder.info(f"✅ 필터링 완료: {final_count:,}건 (등록된 상담사만, 중복 없음)")
 
-                # 4. 집계 테이블 생성 (예약일자 필터 적용된 데이터로)
-                tables, error = create_aggregation_tables(table_df)
+                    # 3. 예약일자 필터링 (테이블용만)
+                    table_df = filtered_df
+                    if filter_reservation:
+                        progress_placeholder.info("🔄 예약일자 필터링 중...")
+                        table_df, error, stats = filter_by_reservation_date(
+                            filtered_df,
+                            apply_filter=True,
+                            custom_start_date=custom_start_date,
+                            custom_end_date=custom_end_date
+                        )
+                        if error:
+                            st.error(f"❌ {error}")
+                            st.session_state.processing = False
+                            return
+                        if stats:
+                            progress_placeholder.info(f"✅ 예약일자 필터 적용 (허용범위: {stats['과거기준일']} ~ {stats['미래기준일']}): {stats['관리대상']}건 (빈값:{stats['빈값']}, 과거:{stats['과거']}, 미래초과:{stats['기준일초과']})")
+                        else:
+                            progress_placeholder.info(f"✅ 예약일자 필터 적용: {len(table_df)}건 (관리대상만)")
 
-                if error:
-                    st.error(f"❌ {error}")
-                    return
+                    # 4. 집계 테이블 생성 (예약일자 필터 적용된 데이터로)
+                    progress_placeholder.info("🔄 집계 테이블 생성 중...")
+                    tables, error = create_aggregation_tables(table_df)
 
-                # 세션 상태에 저장
-                st.session_state['sales_tables'] = tables
-                st.session_state['sales_raw_data'] = filtered_df
+                    if error:
+                        st.error(f"❌ {error}")
+                        st.session_state.processing = False
+                        return
 
-                st.success("✅ 집계 테이블 생성 완료!")
-                st.rerun()
+                    # 세션 상태에 저장
+                    st.session_state['sales_tables'] = tables
+                    st.session_state['sales_raw_data'] = filtered_df
+                    st.session_state.processing = False
+
+                    progress_placeholder.success("✅ 집계 테이블 생성 완료!")
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"❌ 처리 중 오류 발생: {str(e)}")
+                    st.session_state.processing = False
+                    progress_placeholder.empty()
 
     # 결과 표시
-    if 'sales_tables' in st.session_state and 'sales_raw_data' in st.session_state:
+    if ('sales_tables' in st.session_state and st.session_state['sales_tables'] is not None and
+        'sales_raw_data' in st.session_state and st.session_state['sales_raw_data'] is not None):
         st.markdown("---")
         st.subheader("📊 분석 결과")
 

@@ -160,21 +160,23 @@ def show():
     </div>
     """, unsafe_allow_html=True)
 
-    # 세션 상태 초기화
+    # 세션 상태 초기화 (딕셔너리 방식)
     if "promo_config" not in st.session_state:
         config, error = load_config()
         if error:
             st.warning(error)
         st.session_state.promo_config = config
 
-    if "promo_df" not in st.session_state:
-        st.session_state.promo_df = None
+    session_defaults = {
+        'promo_df': None,
+        'promo_results': None,
+        'promo_filtered_df': None,
+        'processing': False
+    }
 
-    if "promo_results" not in st.session_state:
-        st.session_state.promo_results = None
-
-    if "promo_filtered_df" not in st.session_state:
-        st.session_state.promo_filtered_df = None
+    for key, default_value in session_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
 
     # 설정 가져오기
     config = st.session_state.promo_config
@@ -190,35 +192,47 @@ def show():
     )
 
     if uploaded_file:
-        with st.spinner("🔄 파일 처리 중..."):
-            df, error = process_promotion_file(uploaded_file)
-            if error:
-                st.error(f"❌ {error}")
-            else:
-                st.session_state.promo_df = df
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("총 레코드", f"{len(df):,}개")
-                with col2:
-                    if "주문 일자" in df.columns:
-                        min_date = df["주문 일자"].min()
-                        st.metric("시작일", min_date.strftime("%Y-%m-%d") if pd.notna(min_date) else "N/A")
-                with col3:
-                    if "주문 일자" in df.columns:
-                        max_date = df["주문 일자"].max()
-                        st.metric("종료일", max_date.strftime("%Y-%m-%d") if pd.notna(max_date) else "N/A")
+        if not st.session_state.processing:
+            # 진행 상황 표시를 위한 placeholder
+            progress_placeholder = st.empty()
 
-                # 날짜 범위 자동 설정
-                if "주문 일자" in df.columns:
-                    if not pd.api.types.is_datetime64_any_dtype(df["주문 일자"]):
-                        df["주문 일자"] = pd.to_datetime(df["주문 일자"], errors='coerce')
-                    valid_dates = df["주문 일자"].dropna()
-                    if not valid_dates.empty:
-                        min_date = valid_dates.min().date()
-                        max_date = valid_dates.max().date()
-                        if "date_range" not in config or not config["date_range"].get("start_date"):
-                            config["date_range"]["start_date"] = str(min_date)
-                            config["date_range"]["end_date"] = str(max_date)
+            try:
+                progress_placeholder.info("🔄 파일 처리 중...")
+                df, error = process_promotion_file(uploaded_file)
+                if error:
+                    st.error(f"❌ {error}")
+                    progress_placeholder.empty()
+                else:
+                    st.session_state.promo_df = df
+                    progress_placeholder.success("✅ 파일 처리 완료!")
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("총 레코드", f"{len(df):,}개")
+                    with col2:
+                        if "주문 일자" in df.columns:
+                            min_date = df["주문 일자"].min()
+                            st.metric("시작일", min_date.strftime("%Y-%m-%d") if pd.notna(min_date) else "N/A")
+                    with col3:
+                        if "주문 일자" in df.columns:
+                            max_date = df["주문 일자"].max()
+                            st.metric("종료일", max_date.strftime("%Y-%m-%d") if pd.notna(max_date) else "N/A")
+
+                    # 날짜 범위 자동 설정
+                    if "주문 일자" in df.columns:
+                        if not pd.api.types.is_datetime64_any_dtype(df["주문 일자"]):
+                            df["주문 일자"] = pd.to_datetime(df["주문 일자"], errors='coerce')
+                        valid_dates = df["주문 일자"].dropna()
+                        if not valid_dates.empty:
+                            min_date = valid_dates.min().date()
+                            max_date = valid_dates.max().date()
+                            if "date_range" not in config or not config["date_range"].get("start_date"):
+                                config["date_range"]["start_date"] = str(min_date)
+                                config["date_range"]["end_date"] = str(max_date)
+
+            except Exception as e:
+                st.error(f"❌ 파일 처리 중 오류 발생: {str(e)}")
+                progress_placeholder.empty()
 
     st.divider()
 
@@ -433,33 +447,49 @@ def show():
         if st.session_state.promo_df is None:
             st.error("❌ 먼저 데이터 파일을 업로드해주세요!")
         else:
-            with st.spinner("🔄 데이터 분석 중... 잠시만 기다려주세요."):
-                # 날짜를 datetime으로 변환
-                start_dt = pd.Timestamp(start_date)
-                end_dt = pd.Timestamp(end_date).replace(hour=23, minute=59, second=59)
+            if not st.session_state.processing:
+                st.session_state.processing = True
 
-                # 분석 실행
-                result_df, error, filtered_df = analyze_promotion_data_new(
-                    df=st.session_state.promo_df,
-                    analysis_mode=analysis_mode,
-                    product_weights=config["product_weights"],
-                    include_services=include_services,
-                    min_criteria=min_criteria,
-                    promotion_tiers=config.get("promotion_tiers", []),
-                    start_date=start_dt,
-                    end_date=end_dt,
-                    include_online=include_online,
-                    include_indirect=include_indirect
-                )
+                # 진행 상황 표시를 위한 placeholder
+                progress_placeholder = st.empty()
 
-                if error:
-                    st.error(f"❌ {error}")
-                else:
-                    st.session_state.promo_results = result_df
-                    st.session_state.promo_filtered_df = filtered_df
-                    st.session_state.promo_analysis_mode = analysis_mode  # 분석 모드 저장
-                    st.session_state.prev_analysis_mode = analysis_mode  # 이전 모드 업데이트
-                    st.success("✅ 분석이 완료되었습니다!")
+                try:
+                    progress_placeholder.info("🔄 데이터 분석 중... 잠시만 기다려주세요.")
+
+                    # 날짜를 datetime으로 변환
+                    start_dt = pd.Timestamp(start_date)
+                    end_dt = pd.Timestamp(end_date).replace(hour=23, minute=59, second=59)
+
+                    # 분석 실행
+                    result_df, error, filtered_df = analyze_promotion_data_new(
+                        df=st.session_state.promo_df,
+                        analysis_mode=analysis_mode,
+                        product_weights=config["product_weights"],
+                        include_services=include_services,
+                        min_criteria=min_criteria,
+                        promotion_tiers=config.get("promotion_tiers", []),
+                        start_date=start_dt,
+                        end_date=end_dt,
+                        include_online=include_online,
+                        include_indirect=include_indirect
+                    )
+
+                    if error:
+                        st.error(f"❌ {error}")
+                        st.session_state.processing = False
+                        progress_placeholder.empty()
+                    else:
+                        st.session_state.promo_results = result_df
+                        st.session_state.promo_filtered_df = filtered_df
+                        st.session_state.promo_analysis_mode = analysis_mode  # 분석 모드 저장
+                        st.session_state.prev_analysis_mode = analysis_mode  # 이전 모드 업데이트
+                        st.session_state.processing = False
+                        progress_placeholder.success("✅ 분석이 완료되었습니다!")
+
+                except Exception as e:
+                    st.error(f"❌ 분석 중 오류 발생: {str(e)}")
+                    st.session_state.processing = False
+                    progress_placeholder.empty()
 
     # === 결과 표시 ===
     if st.session_state.promo_results is not None:

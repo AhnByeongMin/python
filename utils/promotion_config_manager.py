@@ -2,14 +2,15 @@
 프로모션 설정 관리 모듈
 
 이 모듈은 프로모션 설정의 저장, 불러오기, 초기화 기능을 제공합니다.
-설정은 data/promotion_config.json 파일에 저장됩니다.
+설정은 SQLite 데이터베이스에 저장됩니다. (이전 JSON 파일 방식에서 DB로 전환됨)
 """
 
 import json
 import os
 from typing import Dict, Tuple, Optional
+from .db_manager import get_db_manager
 
-# 설정 파일 경로
+# 설정 파일 경로 (하위 호환성을 위해 유지)
 CONFIG_FILE = "data/promotion_config.json"
 
 # 기본 설정값
@@ -43,7 +44,7 @@ DEFAULT_CONFIG = {
 
 def save_config(config_data: Dict) -> Tuple[bool, Optional[str]]:
     """
-    프로모션 설정을 JSON 파일로 저장
+    프로모션 설정을 데이터베이스에 저장 (DB 전환)
 
     Args:
         config_data: 저장할 설정 데이터
@@ -52,16 +53,13 @@ def save_config(config_data: Dict) -> Tuple[bool, Optional[str]]:
         Tuple[bool, Optional[str]]: (성공 여부, 오류 메시지)
     """
     try:
-        # data 폴더가 없으면 생성
-        os.makedirs("data", exist_ok=True)
-
         # 마지막 업데이트 시간 추가
         from datetime import datetime
         config_data["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # JSON 파일로 저장
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(config_data, f, ensure_ascii=False, indent=2)
+        # DB에 저장
+        db = get_db_manager()
+        db.save_promotion_config("기본설정", config_data)
 
         return True, None
 
@@ -71,20 +69,20 @@ def save_config(config_data: Dict) -> Tuple[bool, Optional[str]]:
 
 def load_config() -> Tuple[Optional[Dict], Optional[str]]:
     """
-    JSON 파일에서 프로모션 설정을 불러오기
-    파일이 없으면 기본 설정 반환
+    데이터베이스에서 프로모션 설정을 불러오기 (DB 전환)
+    설정이 없으면 기본 설정 반환
 
     Returns:
         Tuple[Optional[Dict], Optional[str]]: (설정 데이터, 오류 메시지)
     """
     try:
-        # 파일이 없으면 기본 설정 반환
-        if not os.path.exists(CONFIG_FILE):
-            return DEFAULT_CONFIG.copy(), None
+        # DB에서 불러오기
+        db = get_db_manager()
+        config_data = db.get_promotion_config("기본설정")
 
-        # JSON 파일 불러오기
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            config_data = json.load(f)
+        # 설정이 없으면 기본 설정 반환
+        if config_data is None:
+            return DEFAULT_CONFIG.copy(), None
 
         return config_data, None
 

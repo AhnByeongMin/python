@@ -1,0 +1,41 @@
+{
+  "type": "reward",
+  "data": [
+    {
+      "amount": 150000,
+      "count": 2
+    },
+    {
+      "amount": 100000,
+      "count": 4
+    },
+    {
+      "amount": 50000,
+      "count": 3
+    },
+    {
+      "amount": 30000,
+      "count": 4
+    },
+    {
+      "amount": 10000,
+      "count": 3
+    }
+  ],
+  "settings": {
+    "promotion_type": "포상금",
+    "include_products": [
+      "안마의자",
+      "라클라우드",
+      "정수기"
+    ],
+    "include_services": true,
+    "direct_only": true,
+    "criteria": [
+      "승인건수"
+    ],
+    "min_condition": 8,
+    "include_all_consultants": true,
+    "date_range_option": "사용자 정의"
+  }
+}

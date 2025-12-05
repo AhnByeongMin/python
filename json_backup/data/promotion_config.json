@@ -1,0 +1,38 @@
+{
+  "last_updated": "2025-10-29 12:51:56",
+  "product_weights": {
+    "안마의자": 5,
+    "라클라우드": 3,
+    "정수기": 2,
+    "더케어": 1,
+    "멤버십": 1
+  },
+  "include_service_products": false,
+  "minimum_criteria": {
+    "count": 7
+  },
+  "promotion_tiers": [
+    {
+      "name": "1등급",
+      "min_score": 10,
+      "max_score": null
+    },
+    {
+      "name": "2등급",
+      "min_score": 5,
+      "max_score": 9
+    },
+    {
+      "name": "3등급",
+      "min_score": 3,
+      "max_score": 4
+    }
+  ],
+  "analysis_mode": "제품별",
+  "date_range": {
+    "start_date": "2025-10-20",
+    "end_date": "2025-10-24"
+  },
+  "include_online": false,
+  "include_indirect": false
+}

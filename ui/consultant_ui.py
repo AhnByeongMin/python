@@ -1179,15 +1179,18 @@ def show():
     </style>
     """, unsafe_allow_html=True)
     
-    # 세션 상태 초기화
-    if 'consultant_df' not in st.session_state:
-        st.session_state.consultant_df = None
-    if 'calltime_df' not in st.session_state:
-        st.session_state.calltime_df = None
-    if 'performance_df' not in st.session_state:
-        st.session_state.performance_df = None
-    if 'filtered_data' not in st.session_state:
-        st.session_state.filtered_data = None
+    # 세션 상태 초기화 (딕셔너리 방식)
+    session_defaults = {
+        'consultant_df': None,
+        'calltime_df': None,
+        'performance_df': None,
+        'filtered_data': None,
+        'processing': False
+    }
+
+    for key, default_value in session_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
     
     # 파일 업로드 UI
     st.subheader("데이터 파일 업로드")
@@ -1204,131 +1207,164 @@ def show():
     
     # 메인 로직
     if consultant_file is not None and calltime_file is not None:
-        # 파일 처리 진행 상태 표시
-        with st.spinner('파일 처리 중...'):
-            # 파일 위치 저장을 위해 seek(0)
-            consultant_file.seek(0)
-            calltime_file.seek(0)
-            
-            # 파일 처리 시도
-            consultant_df, consultant_error = process_consultant_file(consultant_file)
-            calltime_df, calltime_error = process_calltime_file(calltime_file)
-        
-        # 오류 체크
-        if consultant_error:
-            st.error(consultant_error)
-        elif calltime_error:
-            st.error(calltime_error)
-        else:
-            # 세션 상태에 데이터프레임 저장
-            st.session_state.consultant_df = consultant_df
-            st.session_state.calltime_df = calltime_df
-            
-            # 분석 실행
-            performance_df, filtered_data, analysis_error = analyze_consultant_performance(consultant_df, calltime_df)
-            
-            if analysis_error:
-                st.error(analysis_error)
-            else:
-                # 세션 상태에 결과 저장
-                st.session_state.performance_df = performance_df
-                st.session_state.filtered_data = filtered_data
-                
-                # 결과 표시 (압축된 버전)
-                st.markdown('<h3>상담원 실적 현황</h3>', unsafe_allow_html=True)
-                
-                # 필터링된 데이터 정보 표시 (추가됨)
-                if filtered_data is not None:
-                    st.write(f"필터링된 원본 데이터: {len(filtered_data)}개의 행, 판매채널이 '본사' 또는 '온라인'인 데이터만 포함")
+        if not st.session_state.processing:
+            st.session_state.processing = True
 
-                # 현재 시간 가져오기
-                current_time = datetime.now()
-                # 오전 10시 30분 기준으로 표시 방식 결정
-                cutoff_time = current_time.replace(hour=10, minute=30, second=0, microsecond=0)
+            # 진행 상황 표시를 위한 placeholder
+            progress_placeholder = st.empty()
 
-                # 전일자 강제 조회 옵션 확인
-                force_previous = st.session_state.get('force_previous_day', False)
+            try:
+                # 파일 처리 진행 상태 표시
+                progress_placeholder.info('🔄 파일 처리 중...')
 
-                # 목표 시간 및 이모지 기준 설정
-                if current_time < cutoff_time or force_previous:
-                    # 10시 30분 이전 - 전날 데이터 조회
-                    is_previous_day = True
+                # 파일 위치 저장을 위해 seek(0)
+                consultant_file.seek(0)
+                calltime_file.seek(0)
 
-                    # 이전 영업일 구하기 (공휴일 & 주말 제외)
-                    prev_date = get_previous_business_day(current_time)
+                # 파일 처리 시도
+                consultant_df, consultant_error = process_consultant_file(consultant_file)
+                calltime_df, calltime_error = process_calltime_file(calltime_file)
 
-                    # 전날 근무 설정 가져오기
-                    work_config = get_work_config(
-                        target_date=prev_date,
-                        manual_config=st.session_state.get('manual_work_config')
-                    )
-                    current_target_seconds = (
-                        work_config["target_hours"] * 3600 +
-                        work_config["target_minutes"] * 60
-                    )
-                    current_target_time = format_time(current_target_seconds)
-
-                    date_display = f"★전자계약 제외★ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {prev_date.year}년 {prev_date.month}월 {prev_date.day}일 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 전체집계"
+                # 오류 체크
+                if consultant_error:
+                    st.error(consultant_error)
+                    st.session_state.processing = False
+                    progress_placeholder.empty()
+                elif calltime_error:
+                    st.error(calltime_error)
+                    st.session_state.processing = False
+                    progress_placeholder.empty()
                 else:
-                    # 10시 30분 이후 - 당일 데이터 조회
-                    is_previous_day = False
+                    # 세션 상태에 데이터프레임 저장
+                    st.session_state.consultant_df = consultant_df
+                    st.session_state.calltime_df = calltime_df
 
-                    # 당일 근무 설정 가져오기
-                    work_config = get_work_config(
-                        target_date=current_time,
-                        manual_config=st.session_state.get('manual_work_config')
-                    )
-                    current_target_seconds = calculate_target_calltime_seconds(
-                        current_time.time(),
-                        work_config
-                    )
-                    current_target_time = format_time(current_target_seconds)
+                    progress_placeholder.info('🔄 데이터 분석 중...')
 
-                    date_display = f"★전자계약 제외★ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {current_time.year}년 {current_time.month}월 {current_time.day}일 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {current_time.hour}시{current_time.minute}분 기준"
+                    # 분석 실행
+                    performance_df, filtered_data, analysis_error = analyze_consultant_performance(consultant_df, calltime_df)
 
-                # 상태 표시
-                st.markdown(f'<div class="status-container"><div class="status-chip success">분석 완료</div><div class="timestamp">{current_time.strftime("%Y년 %m월 %d일 %H시 %M분")} 기준 | 현재 목표 콜타임: {current_target_time}</div></div>', unsafe_allow_html=True)
-
-                # 데이터 정보 표시
-                st.write(f"총 {len(performance_df)}명의 상담원 실적이 분석되었습니다.")
-
-                # 날짜 표시
-                st.markdown(DATE_DISPLAY_STYLE.format(date_display=date_display), unsafe_allow_html=True)
-                
-                # 범례를 날짜 바로 아래에 간단하게 추가 - 간격 축소 및 양쪽 모드 시인성 개선
-                st.markdown(f'<div class="simple-legend">⏱️ 목표시간: {current_target_time} | 🚩:달성 | ⏰:분발필요</div>', unsafe_allow_html=True)
-
-                # 컴팩트 HTML 테이블 생성 및 표시 - is_previous_day 파라미터 전달
-                html_table = generate_compact_html_table(performance_df, is_previous_day)
-                st.markdown(html_table, unsafe_allow_html=True)
-                
-                # 시각화 섹션 - 접을 수 있게 수정
-                with st.expander("시각화 보기", expanded=False):
-                    st.plotly_chart(create_compact_visualization(performance_df), use_container_width=True)
-                
-                # 엑셀 내보내기
-                st.markdown("### 엑셀 파일 다운로드")
-                st.markdown(DOWNLOAD_BUTTON_STYLE, unsafe_allow_html=True)
-
-                try:
-                    # 현재 날짜와 UUID 생성
-                    today = datetime.now().strftime('%Y%m%d')
-                    unique_id = str(uuid.uuid4())[:4]  # UUID 앞 4자리만 사용
-                    file_prefix = f"{today}_{unique_id}_"
-                    
-                    # 엑셀 파일 생성 (필터링된 데이터 포함)
-                    excel_data = create_excel_report(performance_df, filtered_data)
-                    
-                    if excel_data:
-                        # 다운로드 링크 생성 - 필터링된 데이터가 있으면 2시트, 없으면 1시트
-                        sheet_count = "2시트" if filtered_data is not None else "1시트"
-                        b64 = base64.b64encode(excel_data).decode()
-                        href = f'<div class="download-button-container"><a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="{file_prefix}상담원_실적_현황.xlsx" class="download-button">엑셀 다운로드 ({sheet_count})</a></div>'
-                        st.markdown(href, unsafe_allow_html=True)
+                    if analysis_error:
+                        st.error(analysis_error)
+                        st.session_state.processing = False
+                        progress_placeholder.empty()
                     else:
-                        st.error("엑셀 파일 생성에 실패했습니다.")
-                except Exception as e:
-                    st.error(f"엑셀 파일 다운로드 준비 중 오류가 발생했습니다: {str(e)}")
+                        # 세션 상태에 결과 저장
+                        st.session_state.performance_df = performance_df
+                        st.session_state.filtered_data = filtered_data
+                        st.session_state.processing = False
+
+                        progress_placeholder.success('✅ 분석 완료!')
+
+                        # 결과 표시 (압축된 버전)
+                        st.markdown('<h3>상담원 실적 현황</h3>', unsafe_allow_html=True)
+
+                        # 필터링된 데이터 정보 표시 (추가됨)
+                        if filtered_data is not None:
+                            st.write(f"필터링된 원본 데이터: {len(filtered_data)}개의 행, 판매채널이 '본사' 또는 '온라인'인 데이터만 포함")
+
+            except Exception as e:
+                st.error(f"❌ 처리 중 오류 발생: {str(e)}")
+                st.session_state.processing = False
+                progress_placeholder.empty()
+
+    # 결과가 이미 있는 경우 표시
+    if st.session_state.performance_df is not None and not st.session_state.processing:
+        # 결과 표시
+        st.markdown('<h3>상담원 실적 현황</h3>', unsafe_allow_html=True)
+
+        # 필터링된 데이터 정보 표시
+        if st.session_state.filtered_data is not None:
+            st.write(f"필터링된 원본 데이터: {len(st.session_state.filtered_data)}개의 행, 판매채널이 '본사' 또는 '온라인'인 데이터만 포함")
+
+        # 현재 시간 가져오기
+        current_time = datetime.now()
+        # 오전 10시 30분 기준으로 표시 방식 결정
+        cutoff_time = current_time.replace(hour=10, minute=30, second=0, microsecond=0)
+
+        # 전일자 강제 조회 옵션 확인
+        force_previous = st.session_state.get('force_previous_day', False)
+
+        # 목표 시간 및 이모지 기준 설정
+        if current_time < cutoff_time or force_previous:
+            # 10시 30분 이전 - 전날 데이터 조회
+            is_previous_day = True
+
+            # 이전 영업일 구하기 (공휴일 & 주말 제외)
+            prev_date = get_previous_business_day(current_time)
+
+            # 전날 근무 설정 가져오기
+            work_config = get_work_config(
+                target_date=prev_date,
+                manual_config=st.session_state.get('manual_work_config')
+            )
+            current_target_seconds = (
+                work_config["target_hours"] * 3600 +
+                work_config["target_minutes"] * 60
+            )
+            current_target_time = format_time(current_target_seconds)
+
+            date_display = f"★전자계약 제외★ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {prev_date.year}년 {prev_date.month}월 {prev_date.day}일 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 전체집계"
+        else:
+            # 10시 30분 이후 - 당일 데이터 조회
+            is_previous_day = False
+
+            # 당일 근무 설정 가져오기
+            work_config = get_work_config(
+                target_date=current_time,
+                manual_config=st.session_state.get('manual_work_config')
+            )
+            current_target_seconds = calculate_target_calltime_seconds(
+                current_time.time(),
+                work_config
+            )
+            current_target_time = format_time(current_target_seconds)
+
+            date_display = f"★전자계약 제외★ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {current_time.year}년 {current_time.month}월 {current_time.day}일 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {current_time.hour}시{current_time.minute}분 기준"
+
+        # 상태 표시
+        st.markdown(f'<div class="status-container"><div class="status-chip success">분석 완료</div><div class="timestamp">{current_time.strftime("%Y년 %m월 %d일 %H시 %M분")} 기준 | 현재 목표 콜타임: {current_target_time}</div></div>', unsafe_allow_html=True)
+
+        # 데이터 정보 표시
+        st.write(f"총 {len(st.session_state.performance_df)}명의 상담원 실적이 분석되었습니다.")
+
+        # 날짜 표시
+        st.markdown(DATE_DISPLAY_STYLE.format(date_display=date_display), unsafe_allow_html=True)
+
+        # 범례를 날짜 바로 아래에 간단하게 추가 - 간격 축소 및 양쪽 모드 시인성 개선
+        st.markdown(f'<div class="simple-legend">⏱️ 목표시간: {current_target_time} | 🚩:달성 | ⏰:분발필요</div>', unsafe_allow_html=True)
+
+        # 컴팩트 HTML 테이블 생성 및 표시 - is_previous_day 파라미터 전달
+        html_table = generate_compact_html_table(st.session_state.performance_df, is_previous_day)
+        st.markdown(html_table, unsafe_allow_html=True)
+
+        # 시각화 섹션 - 접을 수 있게 수정
+        with st.expander("시각화 보기", expanded=False):
+            st.plotly_chart(create_compact_visualization(st.session_state.performance_df), use_container_width=True)
+
+        # 엑셀 내보내기
+        st.markdown("### 엑셀 파일 다운로드")
+        st.markdown(DOWNLOAD_BUTTON_STYLE, unsafe_allow_html=True)
+
+        try:
+            # 현재 날짜와 UUID 생성
+            today = datetime.now().strftime('%Y%m%d')
+            unique_id = str(uuid.uuid4())[:4]  # UUID 앞 4자리만 사용
+            file_prefix = f"{today}_{unique_id}_"
+
+            # 엑셀 파일 생성 (필터링된 데이터 포함)
+            excel_data = create_excel_report(st.session_state.performance_df, st.session_state.filtered_data)
+
+            if excel_data:
+                # 다운로드 링크 생성 - 필터링된 데이터가 있으면 2시트, 없으면 1시트
+                sheet_count = "2시트" if st.session_state.filtered_data is not None else "1시트"
+                b64 = base64.b64encode(excel_data).decode()
+                href = f'<div class="download-button-container"><a href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}" download="{file_prefix}상담원_실적_현황.xlsx" class="download-button">엑셀 다운로드 ({sheet_count})</a></div>'
+                st.markdown(href, unsafe_allow_html=True)
+            else:
+                st.error("엑셀 파일 생성에 실패했습니다.")
+        except Exception as e:
+            st.error(f"엑셀 파일 다운로드 준비 중 오류가 발생했습니다: {str(e)}")
     else:
         # 파일 업로드 전 안내 화면
         st.info("상담주문계약내역과 콜타임 파일을 모두 업로드하면 분석이 시작됩니다.")

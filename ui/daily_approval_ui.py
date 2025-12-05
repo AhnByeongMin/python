@@ -524,13 +524,17 @@ def show():
     st.title("📊 일일/누적 승인 현황")
     st.markdown(DAILY_APPROVAL_DESCRIPTION, unsafe_allow_html=True)
     
-    # 세션 상태 초기화
-    if 'daily_approval_df' not in st.session_state:
-        st.session_state.daily_approval_df = None
-    if 'daily_calltime_df' not in st.session_state:
-        st.session_state.daily_calltime_df = None
-    if 'daily_approval_results' not in st.session_state:
-        st.session_state.daily_approval_results = None
+    # 세션 상태 초기화 (딕셔너리 방식)
+    session_defaults = {
+        'daily_approval_df': None,
+        'daily_calltime_df': None,
+        'daily_approval_results': None,
+        'processing': False
+    }
+
+    for key, default_value in session_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
     
     # 상담사 관리 섹션 (Expander로 숨김)
     with st.expander("👥 상담사 관리", expanded=False):
@@ -554,49 +558,73 @@ def show():
     
     # 메인 로직
     if analyze_button and approval_file is not None:
-        # 파일 처리 진행 상태 표시
-        with st.spinner('파일 분석 중...'):
-            # 파일 위치 저장을 위해 seek(0)
-            approval_file.seek(0)
-            if calltime_file is not None:
-                calltime_file.seek(0)
-            
-            # 파일 처리 시도
-            approval_df, approval_error = process_approval_file(approval_file)
-            
-            calltime_df = None
-            calltime_error = None
-            if calltime_file is not None:
-                calltime_df, calltime_error = process_calltime_file(calltime_file)
-        
-        # 오류 체크
-        if approval_error:
-            st.error(approval_error)
-        elif calltime_file is not None and calltime_error:
-            st.error(calltime_error)
-        else:
-            # 세션 상태에 데이터프레임 저장
-            st.session_state.daily_approval_df = approval_df
-            st.session_state.daily_calltime_df = calltime_df
-            
-            # 분석 실행
-            results, analysis_error = analyze_daily_approval(approval_df)
-            
-            if analysis_error:
-                st.error(analysis_error)
-            else:
-                # 콜타임 데이터 매칭 (있는 경우)
-                if calltime_df is not None:
-                    results = match_consultant_calltime(results, calltime_df)
-                
-                # 세션 상태에 결과 저장
-                st.session_state.daily_approval_results = results
-                
-                # 결과 표시
-                display_results(
-                    st.session_state.daily_approval_results,
-                    st.session_state.daily_approval_df
-                )
+        if not st.session_state.processing:
+            st.session_state.processing = True
+
+            # 진행 상황 표시를 위한 placeholder
+            progress_placeholder = st.empty()
+
+            try:
+                # 파일 처리 진행 상태 표시
+                progress_placeholder.info('🔄 파일 분석 중...')
+
+                # 파일 위치 저장을 위해 seek(0)
+                approval_file.seek(0)
+                if calltime_file is not None:
+                    calltime_file.seek(0)
+
+                # 파일 처리 시도
+                approval_df, approval_error = process_approval_file(approval_file)
+
+                calltime_df = None
+                calltime_error = None
+                if calltime_file is not None:
+                    calltime_df, calltime_error = process_calltime_file(calltime_file)
+
+                # 오류 체크
+                if approval_error:
+                    st.error(approval_error)
+                    st.session_state.processing = False
+                    progress_placeholder.empty()
+                elif calltime_file is not None and calltime_error:
+                    st.error(calltime_error)
+                    st.session_state.processing = False
+                    progress_placeholder.empty()
+                else:
+                    # 세션 상태에 데이터프레임 저장
+                    st.session_state.daily_approval_df = approval_df
+                    st.session_state.daily_calltime_df = calltime_df
+
+                    progress_placeholder.info('🔄 데이터 분석 중...')
+
+                    # 분석 실행
+                    results, analysis_error = analyze_daily_approval(approval_df)
+
+                    if analysis_error:
+                        st.error(analysis_error)
+                        st.session_state.processing = False
+                        progress_placeholder.empty()
+                    else:
+                        # 콜타임 데이터 매칭 (있는 경우)
+                        if calltime_df is not None:
+                            results = match_consultant_calltime(results, calltime_df)
+
+                        # 세션 상태에 결과 저장
+                        st.session_state.daily_approval_results = results
+                        st.session_state.processing = False
+
+                        progress_placeholder.success('✅ 분석 완료!')
+
+                        # 결과 표시
+                        display_results(
+                            st.session_state.daily_approval_results,
+                            st.session_state.daily_approval_df
+                        )
+
+            except Exception as e:
+                st.error(f"❌ 처리 중 오류 발생: {str(e)}")
+                st.session_state.processing = False
+                progress_placeholder.empty()
     
     # 이미 분석된 결과가 있으면 표시
     elif st.session_state.daily_approval_results is not None:

@@ -14,6 +14,7 @@ from ui import consultant_ui
 from ui import campaign_ui
 from ui import daily_sales_ui
 from ui import promotion_ui  # 새로운 상담사 프로모션 UI 모듈 추가
+from ui import target_settings_ui  # CRM 목표 설정 UI 모듈 추가
 
 # 페이지 설정
 st.set_page_config(
@@ -168,12 +169,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # 최상위 탭 생성 (상담사 프로모션 탭 추가)
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 예약 체험 신규 현황", 
-    "👥 상담원 실적 현황", 
-    "📢 캠페인/정규분배 현황", 
-    "📈 일일 매출 현황", 
-    "🏆 상담사 프로모션 진행현황"  # 새로운 탭 추가
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "📊 예약 체험 신규 현황",
+    "👥 상담원 실적 현황",
+    "📢 캠페인/정규분배 현황",
+    "📈 일일 매출 현황",
+    "🏆 상담사 프로모션 진행현황",
+    "🎯 CRM 목표 설정"  # 새로운 탭 추가
 ])
 
 # 탭1: 매출 데이터 분석 도구
@@ -192,9 +194,13 @@ with tab3:
 with tab4:
     daily_sales_ui.show()
 
-# 탭5: 상담사 프로모션 진행현황 (새로 추가)
+# 탭5: 상담사 프로모션 진행현황
 with tab5:
     promotion_ui.show()
+
+# 탭6: CRM 목표 설정 (새로 추가)
+with tab6:
+    target_settings_ui.show()
 
 # 페이지 하단 정보
 st.markdown("""

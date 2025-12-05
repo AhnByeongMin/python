@@ -110,11 +110,59 @@ def remove_invalid_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """
-    승인매출 엑셀 파일을 처리하는 함수
-    
+    승인매출 엑셀 파일을 처리하는 함수 (단일 또는 다중 파일 지원)
+
+    Args:
+        file: 업로드된 승인매출 엑셀 파일 객체 또는 파일 객체 리스트
+
+    Returns:
+        Tuple[Optional[pd.DataFrame], Optional[str]]: 처리된 데이터프레임과 오류 메시지(있는 경우)
+    """
+    try:
+        # 다중 파일인 경우 (리스트로 전달된 경우)
+        if isinstance(file, list):
+            all_dfs = []
+            error_messages = []
+
+            for idx, single_file in enumerate(file, 1):
+                print(f"파일 {idx}/{len(file)} 처리 중: {single_file.name}")
+                df, error = process_single_approval_file(single_file)
+
+                if error:
+                    error_messages.append(f"파일 {idx} ({single_file.name}): {error}")
+                elif df is not None:
+                    all_dfs.append(df)
+
+            # 오류가 있으면 반환
+            if error_messages:
+                return None, "\n".join(error_messages)
+
+            # 데이터프레임이 없으면 오류 반환
+            if not all_dfs:
+                return None, "처리 가능한 파일이 없습니다."
+
+            # 여러 데이터프레임을 하나로 병합
+            try:
+                combined_df = pd.concat(all_dfs, ignore_index=True)
+                print(f"총 {len(file)}개 파일 병합 완료: {len(combined_df)}행")
+                return combined_df, None
+            except Exception as e:
+                return None, f"파일 병합 중 오류 발생: {str(e)}"
+
+        # 단일 파일인 경우
+        else:
+            return process_single_approval_file(file)
+
+    except Exception as e:
+        return None, f"승인매출 파일 처리 중 오류가 발생했습니다: {str(e)}"
+
+def process_single_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
+    """
+    단일 승인매출 엑셀 파일을 처리하는 함수
+
     Args:
         file: 업로드된 승인매출 엑셀 파일 객체
-        
+
     Returns:
         Tuple[Optional[pd.DataFrame], Optional[str]]: 처리된 데이터프레임과 오류 메시지(있는 경우)
     """
@@ -214,11 +262,59 @@ def process_approval_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
 
 def process_installation_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """
-    설치매출 엑셀 파일을 처리하는 함수
-    
+    설치매출 엑셀 파일을 처리하는 함수 (단일 또는 다중 파일 지원)
+
+    Args:
+        file: 업로드된 설치매출 엑셀 파일 객체 또는 파일 객체 리스트
+
+    Returns:
+        Tuple[Optional[pd.DataFrame], Optional[str]]: 처리된 데이터프레임과 오류 메시지(있는 경우)
+    """
+    try:
+        # 다중 파일인 경우 (리스트로 전달된 경우)
+        if isinstance(file, list):
+            all_dfs = []
+            error_messages = []
+
+            for idx, single_file in enumerate(file, 1):
+                print(f"설치매출 파일 {idx}/{len(file)} 처리 중: {single_file.name}")
+                df, error = process_single_installation_file(single_file)
+
+                if error:
+                    error_messages.append(f"파일 {idx} ({single_file.name}): {error}")
+                elif df is not None:
+                    all_dfs.append(df)
+
+            # 오류가 있으면 반환
+            if error_messages:
+                return None, "\n".join(error_messages)
+
+            # 데이터프레임이 없으면 오류 반환
+            if not all_dfs:
+                return None, "처리 가능한 설치매출 파일이 없습니다."
+
+            # 여러 데이터프레임을 하나로 병합
+            try:
+                combined_df = pd.concat(all_dfs, ignore_index=True)
+                print(f"총 {len(file)}개 설치매출 파일 병합 완료: {len(combined_df)}행")
+                return combined_df, None
+            except Exception as e:
+                return None, f"설치매출 파일 병합 중 오류 발생: {str(e)}"
+
+        # 단일 파일인 경우
+        else:
+            return process_single_installation_file(file)
+
+    except Exception as e:
+        return None, f"설치매출 파일 처리 중 오류가 발생했습니다: {str(e)}"
+
+def process_single_installation_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
+    """
+    단일 설치매출 엑셀 파일을 처리하는 함수
+
     Args:
         file: 업로드된 설치매출 엑셀 파일 객체
-        
+
     Returns:
         Tuple[Optional[pd.DataFrame], Optional[str]]: 처리된 데이터프레임과 오류 메시지(있는 경우)
     """

@@ -16,7 +16,7 @@ import os
 
 # 비즈니스 로직 가져오기
 from logic.daily_sales_logic import (
-    process_approval_file, process_installation_file, 
+    process_approval_file, process_installation_file,
     analyze_sales_data, create_excel_report, analyze_daily_approval_by_date
 )
 
@@ -28,6 +28,7 @@ from styles.daily_sales_styles import (
 
 # 유틸리티 함수 가져오기
 from utils.utils import format_time
+from utils.db_manager import get_db_manager
 
 def show():
     """일일 매출 현황 탭 UI를 표시하는 메인 함수"""
@@ -43,29 +44,26 @@ def show():
     # 파일에서 목표 값 로드 (앱 시작 시)
     targets = load_targets_from_file()
     
-    # 세션 상태 초기화
-    if 'daily_approval_df' not in st.session_state:
-        st.session_state.daily_approval_df = None
-    if 'daily_installation_df' not in st.session_state:
-        st.session_state.daily_installation_df = None
-    if 'cumulative_approval' not in st.session_state:
-        st.session_state.cumulative_approval = None
-    if 'daily_approval' not in st.session_state:
-        st.session_state.daily_approval = None
-    if 'cumulative_installation' not in st.session_state:
-        st.session_state.cumulative_installation = None
-    if 'latest_date' not in st.session_state:
-        st.session_state.latest_date = None
-    if 'available_dates' not in st.session_state:
-        st.session_state.available_dates = []
-    if 'selected_date' not in st.session_state:
-        st.session_state.selected_date = None
-    if 'selected_date_str' not in st.session_state:
-        st.session_state.selected_date_str = None
-    if 'direct_target' not in st.session_state:
-        st.session_state.direct_target = targets['direct_target']
-    if 'affiliate_target' not in st.session_state:
-        st.session_state.affiliate_target = targets['affiliate_target']
+    # 세션 상태 초기화 - 한 번만 실행되도록 최적화
+    session_defaults = {
+        'daily_approval_df': None,
+        'daily_installation_df': None,
+        'cumulative_approval': None,
+        'daily_approval': None,
+        'cumulative_installation': None,
+        'latest_date': None,
+        'available_dates': [],
+        'selected_date': None,
+        'selected_date_str': None,
+        'direct_target': targets['direct_target'],
+        'affiliate_target': targets['affiliate_target'],
+        'last_uploaded_files': None,  # 마지막 업로드된 파일 추적
+        'processing': False  # 처리 중 상태 플래그
+    }
+
+    for key, default_value in session_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
     
     # 이하 기존 코드...
 
@@ -77,13 +75,13 @@ def show():
     
     with col1:
         st.markdown("### 승인매출 파일 첨부")
-        # 키 이름 변경: approval_file -> daily_approval_file
-        approval_file = st.file_uploader("승인매출 엑셀 파일을 업로드하세요", type=['xlsx', 'xls'], key="daily_approval_file")
-    
+        # 다중 파일 업로드 가능하도록 accept_multiple_files=True 추가
+        approval_files = st.file_uploader("승인매출 엑셀 파일을 업로드하세요 (여러 파일 선택 가능)", type=['xlsx', 'xls'], key="daily_approval_file", accept_multiple_files=True)
+
     with col2:
         st.markdown("### 설치매출 파일 첨부")
-        # 키 이름 변경: installation_file -> daily_installation_file
-        installation_file = st.file_uploader("설치매출 엑셀 파일을 업로드하세요", type=['xlsx', 'xls'], key="daily_installation_file")
+        # 다중 파일 업로드 가능하도록 accept_multiple_files=True 추가
+        installation_files = st.file_uploader("설치매출 엑셀 파일을 업로드하세요 (여러 파일 선택 가능)", type=['xlsx', 'xls'], key="daily_installation_file", accept_multiple_files=True)
     
     # 분석 버튼
     st.markdown('<div class="button-container">', unsafe_allow_html=True)
@@ -93,26 +91,43 @@ def show():
     st.markdown('</div>', unsafe_allow_html=True)  # 카드 닫기
     
     # 메인 로직
-    if analyze_button and approval_file is not None:
+    if analyze_button and approval_files is not None and len(approval_files) > 0:
+        # 처리 중 상태 설정
+        st.session_state.processing = True
+
         # 파일 처리 진행 상태 표시
         with st.spinner('파일 분석 중...'):
+            # 업로드된 파일 수 표시
+            progress_placeholder = st.empty()
+            progress_placeholder.info(f"승인매출 파일 {len(approval_files)}개 처리 중...")
+
             # 파일 위치 저장을 위해 seek(0)
-            approval_file.seek(0)
-            if installation_file is not None:
-                installation_file.seek(0)
-            
-            # 파일 처리 시도
-            approval_df, approval_error = process_approval_file(approval_file)
-            
+            for approval_file in approval_files:
+                approval_file.seek(0)
+
+            if installation_files is not None and len(installation_files) > 0:
+                progress_placeholder.info(f"설치매출 파일 {len(installation_files)}개 처리 중...")
+                for installation_file in installation_files:
+                    installation_file.seek(0)
+
+            # 파일 처리 시도 - 다중 파일 지원
+            progress_placeholder.info("데이터 분석 중... 잠시만 기다려주세요.")
+            approval_df, approval_error = process_approval_file(approval_files)
+
             installation_df = None
             installation_error = None
-            if installation_file is not None:
-                installation_df, installation_error = process_installation_file(installation_file)
+            if installation_files is not None and len(installation_files) > 0:
+                installation_df, installation_error = process_installation_file(installation_files)
+
+            # 진행 상태 메시지 제거
+            progress_placeholder.empty()
         
         # 오류 체크
         if approval_error:
+            st.session_state.processing = False
             st.error(approval_error)
-        elif installation_file is not None and installation_error:
+        elif installation_files is not None and installation_error:
+            st.session_state.processing = False
             st.error(installation_error)
         else:
             # 세션 상태에 데이터프레임 저장
@@ -121,8 +136,9 @@ def show():
             
             # 분석 실행
             results = analyze_sales_data(approval_df, installation_df)
-            
+
             if 'error' in results:
+                st.session_state.processing = False
                 st.error(results['error'])
             else:
                 # 세션 상태에 결과 저장
@@ -147,6 +163,9 @@ def show():
                             st.session_state.selected_date = unique_dates[0]
                             st.session_state.selected_date_str = unique_dates[0].strftime("%Y-%m-%d")
                 
+                # 처리 완료 상태로 변경
+                st.session_state.processing = False
+
                 # 결과 표시
                 display_results(
                     st.session_state.cumulative_approval,
@@ -173,91 +192,77 @@ def show():
     else:
         # 파일 업로드 전 안내 화면
         st.markdown('<div class="material-card info-card">', unsafe_allow_html=True)
-        st.info("승인매출 파일을 업로드하고 설치매출 파일(선택사항)도 업로드한 후 분석 시작 버튼을 클릭하세요.")
+        st.info("승인매출 파일을 업로드하고(여러 파일 선택 가능) 설치매출 파일(선택사항)도 업로드한 후 분석 시작 버튼을 클릭하세요.")
         st.markdown(USAGE_GUIDE_MARKDOWN, unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)  # 카드 닫기
 
 def load_targets_from_file(file_path='targets.json'):
     """
-    JSON 파일에서 목표 값을 로드하는 함수
+    데이터베이스에서 목표 값을 로드하는 함수 (DB 전환)
     현재 월에 해당하는 목표 값을 반환합니다.
-    
+
     Args:
-        file_path: JSON 파일 경로
-        
+        file_path: 하위 호환성을 위한 파라미터 (더 이상 사용되지 않음)
+
     Returns:
-        Dict: 목표 값 딕셔너리 (파일이 없으면 기본값 반환)
+        Dict: 목표 값 딕셔너리 {direct_target, affiliate_target}
     """
     # 현재 월 가져오기
-    current_month = str(datetime.now().month)
-    
-    # 기본 목표 값 (4월 기준)
-    default_targets = {
-        'monthly_targets': {
-            "1": {"direct_target": 637079377.9, "affiliate_target": 483198007.5},
-            "2": {"direct_target": 624064416.5, "affiliate_target": 458209653.2},
-            "3": {"direct_target": 648472018.3, "affiliate_target": 463179204.7},
-            "4": {"direct_target": 630029743, "affiliate_target": 433543524.1},
-            "5": {"direct_target": 757239777.4, "affiliate_target": 584571060.3},
-            "6": {"direct_target": 608782879.8, "affiliate_target": 408622318.6},
-            "7": {"direct_target": 575887424.2, "affiliate_target": 366464449.5},
-            "8": {"direct_target": 602506644.4, "affiliate_target": 420888813},
-            "9": {"direct_target": 680856555.5, "affiliate_target": 527300395.6},
-            "10": {"direct_target": 670544171.5, "affiliate_target": 526085523.9},
-            "11": {"direct_target": 612021553, "affiliate_target": 451084620.3},
-            "12": {"direct_target": 599370109.6, "affiliate_target": 434870894.6}
-        }
+    current_month = datetime.now().month
+
+    # 기본 목표 값 (DB에 데이터가 없을 경우)
+    default_target = {
+        'direct_target': 630029743,
+        'affiliate_target': 433543524
     }
-    
+
     try:
-        if os.path.exists(file_path):
-            with open(file_path, 'r') as f:
-                targets_data = json.load(f)
-            
-            # 파일에 monthly_targets가 있는지 확인
-            if 'monthly_targets' not in targets_data:
-                # 이전 형식의 파일이면 새 형식으로 변환
-                old_direct = targets_data.get('direct_target', 630029743)
-                old_affiliate = targets_data.get('affiliate_target', 433543524)
-                
-                # 현재 월의 값만 업데이트하고 나머지는 기본값 유지
-                targets_data = default_targets.copy()
-                targets_data['monthly_targets'][current_month] = {
-                    'direct_target': old_direct,
-                    'affiliate_target': old_affiliate
-                }
-                
-                # 새 형식으로 파일 저장
-                save_targets_to_file(targets_data, file_path)
-            
-            # 현재 월의 목표 값 반환
-            if current_month in targets_data['monthly_targets']:
-                return targets_data['monthly_targets'][current_month]
-            else:
-                # 현재 월의 데이터가 없으면 기본값 사용
-                return default_targets['monthly_targets'].get(current_month, default_targets['monthly_targets']["4"])
-                
+        db = get_db_manager()
+        target = db.get_monthly_target(current_month)
+
+        if target:
+            return target
         else:
-            # 파일이 없으면 기본값으로 파일 생성
-            save_targets_to_file(default_targets, file_path)
-            # 현재 월의 목표 값 반환
-            return default_targets['monthly_targets'].get(current_month, default_targets['monthly_targets']["4"])
+            # DB에 해당 월 데이터가 없으면 기본값 반환
+            print(f"경고: {current_month}월 목표 데이터가 DB에 없습니다. 기본값 사용.")
+            return default_target
+
     except Exception as e:
         print(f"목표 값 로드 중 오류: {str(e)}")
-        # 기본값의 현재 월 데이터 반환
-        return default_targets['monthly_targets'].get(current_month, default_targets['monthly_targets']["4"])
+        return default_target
 
 def save_targets_to_file(targets, file_path='targets.json'):
     """
-    목표 값을 JSON 파일에 저장하는 함수
-    
+    목표 값을 데이터베이스에 저장하는 함수 (DB 전환)
+
     Args:
         targets: 저장할 목표 값 딕셔너리
-        file_path: JSON 파일 경로
+        file_path: 하위 호환성을 위한 파라미터 (더 이상 사용되지 않음)
+
+    Returns:
+        bool: 저장 성공 여부
     """
     try:
-        with open(file_path, 'w') as f:
-            json.dump(targets, f, indent=2)
+        db = get_db_manager()
+
+        # targets가 monthly_targets 형식인 경우
+        if 'monthly_targets' in targets:
+            for month_str, target_data in targets['monthly_targets'].items():
+                month = int(month_str)
+                db.set_monthly_target(
+                    month,
+                    target_data['direct_target'],
+                    target_data['affiliate_target']
+                )
+        # 단일 월 데이터인 경우 (현재 월로 저장)
+        elif 'direct_target' in targets and 'affiliate_target' in targets:
+            current_month = datetime.now().month
+            db.set_monthly_target(
+                current_month,
+                targets['direct_target'],
+                targets['affiliate_target']
+            )
+
         return True
     except Exception as e:
         print(f"목표 값 저장 중 오류: {str(e)}")
@@ -299,10 +304,45 @@ def display_results(
     
     # 목표 입력 UI - 숨김 가능한 expander 사용
     with st.expander("📊 목표 설정", expanded=False):
-        # 현재 월 가져오기
-        current_month = str(datetime.now().month)
-        
-        st.subheader(f"{current_month}월 목표 설정")
+        # 연도/월 선택
+        db = get_db_manager()
+        available_years = db.get_available_years()
+        current_year = datetime.now().year
+        current_month_num = datetime.now().month
+
+        # 사용 가능한 연도가 없으면 현재 연도 추가
+        if not available_years:
+            available_years = [current_year]
+        elif current_year not in available_years:
+            available_years = [current_year] + available_years
+
+        col_year, col_month = st.columns([1, 1])
+
+        with col_year:
+            selected_year = st.selectbox(
+                "연도",
+                options=available_years,
+                index=0,
+                key="target_year_select"
+            )
+
+        with col_month:
+            selected_month = st.selectbox(
+                "월",
+                options=list(range(1, 13)),
+                index=current_month_num - 1,
+                key="target_month_select"
+            )
+
+        current_month = str(selected_month)
+
+        st.subheader(f"{selected_year}년 {selected_month}월 목표 설정")
+
+        # 선택한 연도/월의 목표 로드
+        month_target = db.get_monthly_target(selected_month, selected_year)
+        if month_target:
+            st.session_state.direct_target = month_target['direct_target']
+            st.session_state.affiliate_target = month_target['affiliate_target']
         
         col1, col2 = st.columns(2)
         with col1:
@@ -327,30 +367,19 @@ def display_results(
             # 세션 상태 업데이트
             st.session_state.direct_target = direct_target
             st.session_state.affiliate_target = affiliate_target
-            
-            # 파일에서 전체 목표 데이터 로드
+
+            # DB에 저장
             try:
-                with open('targets.json', 'r') as f:
-                    all_targets = json.load(f)
-            except:
-                # 파일이 없거나 읽을 수 없으면 기본 구조 생성
-                all_targets = {"monthly_targets": {}}
-            
-            # monthly_targets 키가 없으면 추가
-            if 'monthly_targets' not in all_targets:
-                all_targets['monthly_targets'] = {}
-            
-            # 현재 월의 목표 업데이트
-            all_targets['monthly_targets'][current_month] = {
-                'direct_target': direct_target,
-                'affiliate_target': affiliate_target
-            }
-            
-            # 파일에 저장
-            if save_targets_to_file(all_targets):
-                st.success(f"{current_month}월 목표가 저장되었습니다!")
-            else:
-                st.error("목표 저장 중 오류가 발생했습니다.")
+                db = get_db_manager()
+                db.set_monthly_target(
+                    int(selected_month),
+                    direct_target,
+                    affiliate_target,
+                    selected_year
+                )
+                st.success(f"{selected_year}년 {selected_month}월 목표가 저장되었습니다!")
+            except Exception as e:
+                st.error(f"목표 저장 중 오류가 발생했습니다: {str(e)}")
     
     # 현재 세션 상태의 목표 값 사용
     direct_target = st.session_state.direct_target

@@ -1,11 +1,16 @@
 """
-캠페인/정규분배 현황 비즈니스 로직
+캠페인/정규분배 현황 비즈니스 로직 [최적화 버전]
 
 이 모듈은 캠페인/정규분배 현황 탭의 데이터 처리 및 분석 로직을 포함합니다.
 UI와 독립적으로 작동하여 단위 테스트가 가능하도록 설계되었습니다.
+
+최적화 적용 사항:
+- apply(lambda) → 벡터화 연산 (np.select)
+- iterrows() → itertuples() 변환
 """
 
 import pandas as pd
+import numpy as np
 import streamlit as st
 import io
 from io import BytesIO  # BytesIO를 명시적으로 import
@@ -16,6 +21,41 @@ from typing import Tuple, Dict, List, Optional, Any, Union
 
 # 설정 가져오기 (config.py에서 상수 가져오기)
 from utils.config import CAMPAIGN_SETTINGS
+
+
+# ============================================
+# 최적화 함수 - 벡터화 연산
+# ============================================
+
+def get_campaign_type_vectorized(campaign_series: pd.Series) -> pd.Series:
+    """
+    캠페인 타입 분류 함수 - 벡터화 버전
+
+    Args:
+        campaign_series: 캠페인명 시리즈
+
+    Returns:
+        pd.Series: 정렬 순서 시리즈
+    """
+    campaign_lower = campaign_series.fillna('').astype(str).str.lower()
+
+    # 조건 정의
+    cond_campaign = campaign_lower.str.contains('캠', na=False)
+    cond_regular = campaign_lower.str.contains('정규', na=False)
+    cond_redistribution = campaign_lower.str.contains('재분배', na=False)
+
+    # 선택지
+    choices = [
+        CAMPAIGN_SETTINGS["CAMPAIGN_TYPE_ORDER"]["CAMPAIGN"],      # 캠페인
+        CAMPAIGN_SETTINGS["CAMPAIGN_TYPE_ORDER"]["REGULAR"],       # 정규
+        CAMPAIGN_SETTINGS["CAMPAIGN_TYPE_ORDER"]["REDISTRIBUTION"] # 재분배
+    ]
+    conditions = [cond_campaign, cond_regular, cond_redistribution]
+
+    return pd.Series(
+        np.select(conditions, choices, default=CAMPAIGN_SETTINGS["CAMPAIGN_TYPE_ORDER"]["OTHER"]),
+        index=campaign_series.index
+    )
 
 def process_campaign_files(files) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], int, int]:
     """
@@ -132,22 +172,11 @@ def process_campaign_files(files) -> Tuple[Optional[pd.DataFrame], Optional[pd.D
         # 전환율 계산 (주문승인/총합계)
         if '주문승인' in pivot_df.columns:
             pivot_df['전환율'] = pivot_df['주문승인'] / pivot_df['총합계'] * 100
-        
-        # 캠페인 타입 분류 함수 추가
-        def get_campaign_type(campaign_name):
-            campaign_name = str(campaign_name).lower()
-            if '캠' in campaign_name:
-                return CAMPAIGN_SETTINGS["CAMPAIGN_TYPE_ORDER"]["CAMPAIGN"]  # 캠페인
-            elif '정규' in campaign_name:
-                return CAMPAIGN_SETTINGS["CAMPAIGN_TYPE_ORDER"]["REGULAR"]  # 정규
-            elif '재분배' in campaign_name:
-                return CAMPAIGN_SETTINGS["CAMPAIGN_TYPE_ORDER"]["REDISTRIBUTION"]  # 재분배
-            else:
-                return CAMPAIGN_SETTINGS["CAMPAIGN_TYPE_ORDER"]["OTHER"]  # 기타
-        
+
         # 인덱스 리셋 및 정렬 카테고리 추가
         pivot_df = pivot_df.reset_index()
-        pivot_df['정렬순서'] = pivot_df['일반회차 캠페인'].apply(get_campaign_type)
+        # [최적화] apply() → 벡터화 함수 사용
+        pivot_df['정렬순서'] = get_campaign_type_vectorized(pivot_df['일반회차 캠페인'])
         
         # 정렬순서로 먼저 정렬하고, 그 다음 캠페인 이름으로 오름차순 정렬
         pivot_df = pivot_df.sort_values(by=['정렬순서', '일반회차 캠페인'], ascending=[True, True])
@@ -231,52 +260,42 @@ def process_consultant_data(cleaned_data) -> Tuple[Optional[pd.DataFrame], Optio
         # 캠페인 × 상담사 그룹별 개수 계산
         result_df = pd.DataFrame(new_status_df.groupby(["일반회차 캠페인", consultant_col]).size()).reset_index()
         result_df.columns = ["일반회차 캠페인", "상담사", "신규건수"]
-        
-        # 캠페인별 정렬 함수 적용
-        def get_campaign_type(campaign_name):
-            campaign_name = str(campaign_name).lower()
-            if '캠' in campaign_name:
-                return CAMPAIGN_SETTINGS["CAMPAIGN_TYPE_ORDER"]["CAMPAIGN"]  # 캠페인
-            elif '정규' in campaign_name:
-                return CAMPAIGN_SETTINGS["CAMPAIGN_TYPE_ORDER"]["REGULAR"]  # 정규
-            elif '재분배' in campaign_name:
-                return CAMPAIGN_SETTINGS["CAMPAIGN_TYPE_ORDER"]["REDISTRIBUTION"]  # 재분배
-            else:
-                return CAMPAIGN_SETTINGS["CAMPAIGN_TYPE_ORDER"]["OTHER"]  # 기타
-        
-        # 정렬 순서 적용
-        result_df["정렬순서"] = result_df["일반회차 캠페인"].apply(get_campaign_type)
-        result_df = result_df.sort_values(by=["정렬순서", "일반회차 캠페인", "신규건수"], 
+
+        # [최적화] 정렬 순서 적용 - 벡터화 함수 사용
+        result_df["정렬순서"] = get_campaign_type_vectorized(result_df["일반회차 캠페인"])
+        result_df = result_df.sort_values(by=["정렬순서", "일반회차 캠페인", "신규건수"],
                                          ascending=[True, True, False])
-        
+
         # 정렬순서 컬럼 제거
         result_df = result_df.drop(columns=["정렬순서"])
-        
+
         # 총합계 계산
         campaign_totals = result_df.groupby("일반회차 캠페인")["신규건수"].sum().reset_index()
         campaign_totals.columns = ["일반회차 캠페인", "소계"]
-        
+
+        # 캠페인별 소계를 딕셔너리로 변환 (빠른 조회)
+        campaign_total_dict = dict(zip(campaign_totals["일반회차 캠페인"], campaign_totals["소계"]))
+
         # 캠페인별 소계 추가
         final_result = []
-        
+
         # 각 캠페인별로 상담사 정보 추가
         for campaign in result_df["일반회차 캠페인"].unique():
             # 캠페인 소계 행 추가
-            campaign_total = campaign_totals[campaign_totals["일반회차 캠페인"] == campaign]["소계"].values[0]
             final_result.append({
                 "일반회차 캠페인": campaign,
                 "상담사": "",  # 빈 값
-                "신규건수": campaign_total,
+                "신규건수": campaign_total_dict[campaign],
                 "행타입": "캠페인"
             })
-            
-            # 해당 캠페인의 상담사별 행 추가
+
+            # [최적화] 해당 캠페인의 상담사별 행 추가 - itertuples() 사용
             consultants = result_df[result_df["일반회차 캠페인"] == campaign]
-            for _, row in consultants.iterrows():
+            for row in consultants.itertuples(index=False):
                 final_result.append({
                     "일반회차 캠페인": "",  # 빈 값
-                    "상담사": row["상담사"],
-                    "신규건수": row["신규건수"],
+                    "상담사": row.상담사,
+                    "신규건수": row.신규건수,
                     "행타입": "상담사"
                 })
         
@@ -367,17 +386,23 @@ def format_dataframe_for_display(df) -> pd.DataFrame:
     # 행 레이블 컬럼명 변경
     if "행 레이블" in display_df.columns:
         display_df = display_df.rename(columns={"행 레이블": "일반회차 캠페인"})
-    
-    # 전환율 포맷팅
+
+    # [최적화] 전환율 포맷팅 - 벡터화 사용
     if '전환율' in display_df.columns:
-        display_df['전환율'] = display_df['전환율'].apply(lambda x: f"{x:.1f}%" if pd.notnull(x) else "-")
-    
-    # 숫자 컬럼 포맷팅
+        rate = display_df['전환율']
+        formatted = pd.Series(['-'] * len(rate), index=rate.index)
+        valid_mask = rate.notna()
+        formatted[valid_mask] = rate[valid_mask].apply(lambda x: f"{x:.1f}%")
+        display_df['전환율'] = formatted
+
+    # [최적화] 숫자 컬럼 포맷팅 - 벡터화 사용
     numeric_columns = display_df.columns.difference(['일반회차 캠페인', '전환율'])
     for col in numeric_columns:
-        # 0 값은 빈칸으로 표시, 나머지는 정수로 표시
-        display_df[col] = display_df[col].apply(
-            lambda x: "" if pd.isna(x) or x == 0 else f"{int(x)}"
-        )
-    
+        values = display_df[col]
+        # 마스크: NaN이거나 0인 경우 빈 문자열
+        is_empty = values.isna() | (values == 0)
+        formatted = values.fillna(0).astype(int).astype(str)
+        formatted = formatted.where(~is_empty, '')
+        display_df[col] = formatted
+
     return display_df

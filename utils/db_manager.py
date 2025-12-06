@@ -115,7 +115,37 @@ class DatabaseManager:
                 )
             """)
 
+            # 6. 공휴일 캐시 테이블 (API 결과 영구 저장)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS holidays (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    year INTEGER NOT NULL,
+                    month INTEGER NOT NULL,
+                    holiday_date TEXT NOT NULL,
+                    holiday_name TEXT,
+                    fetched_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(year, month, holiday_date)
+                )
+            """)
+
+            # 7. 공휴일 API 호출 기록 테이블 (주 1회 제한용)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS holiday_api_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    year INTEGER NOT NULL,
+                    month INTEGER NOT NULL,
+                    last_fetched TEXT NOT NULL,
+                    success INTEGER DEFAULT 1,
+                    UNIQUE(year, month)
+                )
+            """)
+
             # 인덱스 생성
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_holidays_year_month
+                ON holidays(year, month)
+            """)
+
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_consultants_team
                 ON consultants(team)
@@ -430,6 +460,148 @@ class DatabaseManager:
                 DELETE FROM promotion_configs
                 WHERE name = ?
             """, (name,))
+
+    # ==================== 공휴일 캐시 관련 메서드 ====================
+
+    def get_holidays_for_month(self, year: int, month: int) -> Optional[set]:
+        """
+        특정 연월의 공휴일 목록을 DB에서 조회
+
+        Args:
+            year: 연도
+            month: 월
+
+        Returns:
+            set: 공휴일 날짜 set (datetime.date) 또는 None (캐시 없음)
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # 먼저 API 호출 기록 확인 (캐시가 있는지)
+            cursor.execute("""
+                SELECT last_fetched, success
+                FROM holiday_api_log
+                WHERE year = ? AND month = ?
+            """, (year, month))
+
+            log_row = cursor.fetchone()
+            if log_row is None:
+                return None  # 캐시 없음
+
+            # 공휴일 목록 조회
+            cursor.execute("""
+                SELECT holiday_date
+                FROM holidays
+                WHERE year = ? AND month = ?
+            """, (year, month))
+
+            holidays = set()
+            for row in cursor.fetchall():
+                try:
+                    holiday_date = datetime.strptime(row['holiday_date'], '%Y-%m-%d').date()
+                    holidays.add(holiday_date)
+                except ValueError:
+                    pass
+
+            return holidays
+
+    def should_refresh_holidays(self, year: int, month: int, days_interval: int = 7) -> bool:
+        """
+        공휴일 캐시를 갱신해야 하는지 확인 (주 1회)
+
+        Args:
+            year: 연도
+            month: 월
+            days_interval: 갱신 주기 (일)
+
+        Returns:
+            bool: 갱신 필요 여부
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT last_fetched
+                FROM holiday_api_log
+                WHERE year = ? AND month = ?
+            """, (year, month))
+
+            row = cursor.fetchone()
+            if row is None:
+                return True  # 기록 없음 = 갱신 필요
+
+            try:
+                last_fetched = datetime.strptime(row['last_fetched'], '%Y-%m-%d %H:%M:%S')
+                days_since = (datetime.now() - last_fetched).days
+                return days_since >= days_interval
+            except ValueError:
+                return True
+
+    def save_holidays(self, year: int, month: int, holidays: List[Tuple[str, str]], success: bool = True):
+        """
+        공휴일 목록을 DB에 저장
+
+        Args:
+            year: 연도
+            month: 월
+            holidays: [(날짜문자열, 공휴일명), ...] 형태의 리스트
+            success: API 호출 성공 여부
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            # 기존 공휴일 데이터 삭제 (갱신용)
+            cursor.execute("""
+                DELETE FROM holidays
+                WHERE year = ? AND month = ?
+            """, (year, month))
+
+            # 공휴일 저장
+            for holiday_date, holiday_name in holidays:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO holidays (year, month, holiday_date, holiday_name, fetched_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (year, month, holiday_date, holiday_name, now))
+
+            # API 호출 기록 저장
+            cursor.execute("""
+                INSERT INTO holiday_api_log (year, month, last_fetched, success)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(year, month) DO UPDATE SET
+                    last_fetched = excluded.last_fetched,
+                    success = excluded.success
+            """, (year, month, now, 1 if success else 0))
+
+    def is_api_failed_recently(self, year: int, month: int, hours: int = 24) -> bool:
+        """
+        최근 API 호출이 실패했는지 확인 (재시도 방지)
+
+        Args:
+            year: 연도
+            month: 월
+            hours: 재시도 방지 시간 (시간)
+
+        Returns:
+            bool: 최근 실패 여부
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT last_fetched, success
+                FROM holiday_api_log
+                WHERE year = ? AND month = ? AND success = 0
+            """, (year, month))
+
+            row = cursor.fetchone()
+            if row is None:
+                return False
+
+            try:
+                last_fetched = datetime.strptime(row['last_fetched'], '%Y-%m-%d %H:%M:%S')
+                hours_since = (datetime.now() - last_fetched).total_seconds() / 3600
+                return hours_since < hours
+            except ValueError:
+                return False
 
 
 # 전역 데이터베이스 매니저 인스턴스

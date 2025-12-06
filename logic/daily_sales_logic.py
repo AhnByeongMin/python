@@ -16,6 +16,246 @@ from typing import Dict, List, Optional, Any, Union, Tuple
 # utils.py에서 필요한 함수 가져오기
 from utils.utils import format_time, peek_file_content
 
+# ============================================
+# 최적화 함수 - 벡터화 연산
+# ============================================
+
+def clean_product_name_vectorized(series: pd.Series) -> pd.Series:
+    """
+    품목명 정리 함수 - 벡터화 버전
+    (괄호 제거, 에덴로보 통합, 첫 단어만 추출)
+
+    Args:
+        series: 품목명 시리즈
+
+    Returns:
+        pd.Series: 정리된 품목명
+    """
+    # NaN을 빈 문자열로 변환
+    result = series.fillna('').astype(str).str.strip()
+
+    # 앞에 괄호 제거 (리퍼 제품 처리) - 예: (A)팔콘S -> 팔콘S
+    # 정규식으로 앞의 괄호들 제거
+    result = result.str.replace(r'^(\([^)]*\)\s*)+', '', regex=True)
+
+    # 에덴로보 통합 - 에덴로보로 시작하면 "에덴로보"로 통일
+    is_edenrobo = result.str.startswith('에덴로보')
+    result = result.where(~is_edenrobo, '에덴로보')
+
+    # 괄호 앞부분만 사용 - 예: 팔콘S(1234) -> 팔콘S
+    result = result.str.split('(').str[0].str.strip()
+
+    # '+' 기호가 없고 에덴로보가 아닌 경우, 공백 기준 첫 단어만 추출
+    # 예: "팔코닉 B&O" -> "팔코닉"
+    has_plus = result.str.contains(r'\+', na=False)
+    is_eden = result.str.startswith('에덴로보')
+    has_space = result.str.contains(' ', na=False)
+
+    # 조건: 공백이 있고, +가 없고, 에덴로보가 아닌 경우 첫 단어만 추출
+    extract_first = has_space & ~has_plus & ~is_eden
+    first_word = result.str.split(' ').str[0].str.strip()
+    result = result.where(~extract_first, first_word)
+
+    return result
+
+
+def get_product_name_vectorized(df: pd.DataFrame) -> pd.Series:
+    """
+    제품명 분류 함수 - 벡터화 버전
+    대분류가 안마의자이고 판매유형에 더케어가 포함되면 "더케어", 아니면 대분류 값
+
+    Args:
+        df: 데이터프레임
+
+    Returns:
+        pd.Series: 제품명 시리즈
+    """
+    if "대분류" not in df.columns:
+        return pd.Series([''] * len(df), index=df.index)
+
+    category = df['대분류'].fillna('').astype(str)
+
+    # 기본값은 대분류
+    result = category.copy()
+
+    # 안마의자이고 판매유형에 더케어가 포함된 경우
+    if "판매유형" in df.columns:
+        is_massage = category.str.contains('안마의자', case=False, na=False)
+        sales_type = df['판매유형'].fillna('').astype(str)
+        is_thecare = sales_type.str.contains('더케어', case=False, na=False)
+
+        result = result.where(~(is_massage & is_thecare), '더케어')
+
+    return result
+
+
+def format_phone_number(value) -> str:
+    """
+    전화번호 포맷팅 함수 (한국 전화번호 보정)
+
+    Args:
+        value: 전화번호 값 (int, float 또는 str)
+
+    Returns:
+        str: 포맷된 전화번호 문자열
+    """
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        phone_str = str(int(value))
+
+        # 한국 전화번호 보정
+        if len(phone_str) == 10 and phone_str.startswith('10'):
+            # 휴대폰 번호 (예: 1012345678 -> 01012345678)
+            return '0' + phone_str
+        elif len(phone_str) == 9:
+            if phone_str.startswith('2'):
+                # 서울 지역번호 (예: 212345678 -> 0212345678)
+                return '0' + phone_str
+            elif phone_str[0] in '3456':
+                # 기타 지역번호 (031, 032, 033, 041 등)
+                return '0' + phone_str
+        elif len(phone_str) == 10:
+            # 지역번호 (031, 032, 051 등)
+            area_codes = ('31', '32', '33', '41', '42', '43', '51', '52', '53', '54', '55', '61', '62', '63', '64')
+            if phone_str.startswith(area_codes):
+                return '0' + phone_str
+        return phone_str
+    return str(value)
+
+
+def write_dataframe_to_worksheet_optimized(
+    worksheet,
+    df: pd.DataFrame,
+    header_format,
+    data_format,
+    number_format,
+    date_format,
+    mobile_format,
+    time_format=None,
+    auto_filter: bool = True,
+    freeze_header: bool = True,
+    auto_width: bool = True
+):
+    """
+    DataFrame을 워크시트에 최적화된 방식으로 작성
+    iterrows() 대신 numpy 배열 기반 처리
+
+    Args:
+        worksheet: xlsxwriter 워크시트 객체
+        df: 작성할 DataFrame
+        header_format: 헤더 셀 포맷
+        data_format: 일반 데이터 셀 포맷
+        number_format: 숫자 셀 포맷
+        date_format: 날짜 셀 포맷
+        mobile_format: 전화번호 셀 포맷
+        time_format: 시간 셀 포맷 (선택)
+        auto_filter: 자동 필터 적용 여부
+        freeze_header: 헤더 행 고정 여부
+        auto_width: 열 너비 자동 조정 여부
+    """
+    if df.empty:
+        return
+
+    columns = df.columns.tolist()
+    n_cols = len(columns)
+    n_rows = len(df)
+
+    # 컬럼 타입 미리 분류
+    mobile_cols = set()
+    date_cols = set()
+    time_cols = set()
+
+    for col in columns:
+        col_name = str(col).lower()
+        if any(term in col_name for term in ["전화", "모바일", "휴대", "번호", "폰", "phone", "mobile", "cell"]):
+            mobile_cols.add(col)
+        elif any(term in col_name for term in ["일자", "날짜", "date", "일시"]):
+            date_cols.add(col)
+        elif any(term in col_name for term in ["시간", "time", "hour"]):
+            time_cols.add(col)
+
+    # 열 너비 계산용
+    col_widths = {}
+
+    # 헤더 작성
+    for col_idx, col_name in enumerate(columns):
+        worksheet.write(0, col_idx, col_name, header_format)
+        col_widths[col_idx] = len(str(col_name))
+
+    # 데이터를 numpy 배열로 변환
+    data_values = df.values
+
+    # 데이터 작성
+    for row_idx in range(n_rows):
+        row_data = data_values[row_idx]
+        excel_row = row_idx + 1
+
+        for col_idx in range(n_cols):
+            col_name = columns[col_idx]
+            value = row_data[col_idx]
+
+            # NaN 처리
+            if pd.isna(value):
+                worksheet.write(excel_row, col_idx, "", data_format)
+                continue
+
+            # 전화번호 처리
+            if col_name in mobile_cols:
+                formatted = format_phone_number(value)
+                worksheet.write(excel_row, col_idx, formatted, mobile_format)
+                col_widths[col_idx] = max(col_widths.get(col_idx, 0), len(formatted))
+
+            # 날짜 처리
+            elif col_name in date_cols:
+                if isinstance(value, (datetime, pd.Timestamp)):
+                    worksheet.write_datetime(excel_row, col_idx, value, date_format)
+                    col_widths[col_idx] = max(col_widths.get(col_idx, 0), 12)
+                elif isinstance(value, (int, float)) and 10000 < value < 100000:
+                    worksheet.write(excel_row, col_idx, value, date_format)
+                    col_widths[col_idx] = max(col_widths.get(col_idx, 0), 12)
+                else:
+                    worksheet.write(excel_row, col_idx, value, data_format)
+                    col_widths[col_idx] = max(col_widths.get(col_idx, 0), len(str(value)))
+
+            # 시간 처리
+            elif col_name in time_cols and time_format:
+                if isinstance(value, (datetime, pd.Timestamp)):
+                    worksheet.write_datetime(excel_row, col_idx, value, time_format)
+                    col_widths[col_idx] = max(col_widths.get(col_idx, 0), 10)
+                elif isinstance(value, (int, float)) and 0 <= value < 1:
+                    worksheet.write(excel_row, col_idx, value, time_format)
+                    col_widths[col_idx] = max(col_widths.get(col_idx, 0), 10)
+                elif isinstance(value, (int, float)) and value % 1 != 0:
+                    worksheet.write(excel_row, col_idx, value, date_format)
+                    col_widths[col_idx] = max(col_widths.get(col_idx, 0), 12)
+                else:
+                    worksheet.write(excel_row, col_idx, value, data_format)
+                    col_widths[col_idx] = max(col_widths.get(col_idx, 0), len(str(value)))
+
+            # 숫자 처리
+            elif isinstance(value, (int, float, np.integer, np.floating)):
+                worksheet.write(excel_row, col_idx, value, number_format)
+                col_widths[col_idx] = max(col_widths.get(col_idx, 0), len(f"{value:,.0f}"))
+
+            # 기타 데이터
+            else:
+                str_value = str(value)
+                worksheet.write(excel_row, col_idx, str_value, data_format)
+                col_widths[col_idx] = max(col_widths.get(col_idx, 0), len(str_value))
+
+    # 열 너비 자동 조정
+    if auto_width:
+        for col_idx, width in col_widths.items():
+            adjusted_width = min(max(width + 2, 8), 30)
+            worksheet.set_column(col_idx, col_idx, adjusted_width)
+
+    # 자동 필터 적용
+    if auto_filter and n_rows > 0:
+        worksheet.autofilter(0, 0, n_rows, n_cols - 1)
+
+    # 헤더 행 고정
+    if freeze_header:
+        worksheet.freeze_panes(1, 0)
+
 
 # 목표 데이터 정의 - 2025년 4월 기준 (설치매출 기준)
 INSTALLATION_TARGET_DATA = {
@@ -446,173 +686,114 @@ def process_single_installation_file(file) -> Tuple[Optional[pd.DataFrame], Opti
 def analyze_installation_by_product_model(installation_df):
     """
     제품별 설치현황을 분석하는 함수 (안마의자 제품별 설치현황 표 생성)
-    
+    [최적화 버전] - apply() → 벡터화, for 루프 → groupby
+
     Args:
         installation_df: 설치매출 데이터프레임
-        
+
     Returns:
         pd.DataFrame: 분석 결과 데이터프레임
     """
+    empty_result = pd.DataFrame({
+        "제품명": ["합계"],
+        "직접": [0],
+        "연계": [0],
+        "총건": [0],
+        "비율": ["100.0%"]
+    })
+
     if installation_df is None or installation_df.empty:
-        # 빈 결과 반환
-        return pd.DataFrame({
-            "제품명": ["합계"],
-            "직접": [0],
-            "연계": [0],
-            "총건": [0],
-            "비율": ["100.0%"]
-        })
-    
+        return empty_result
+
     # 품목명 컬럼 확인
     product_name_col = None
     for col_name in ['품목명', '상품명', '제품명', '품목 명', '상품 명', '제품 명']:
         if col_name in installation_df.columns:
             product_name_col = col_name
             break
-    
+
     if product_name_col is None:
-        # 품목명 컬럼이 없는 경우 빈 결과 반환
-        return pd.DataFrame({
-            "제품명": ["합계"],
-            "직접": [0],
-            "연계": [0],
-            "총건": [0],
-            "비율": ["100.0%"]
-        })
-    
+        return empty_result
+
     # 1. 안마의자 필터링 - 대분류 열과 품목명 열을 모두 확인
     massage_chair_mask = installation_df["대분류"].astype(str).str.contains("안마의자", case=False, na=False)
-
-    # 품목명에도 '안마'가 포함된 항목 추가 (대분류가 다른 경우를 위해)
     massage_chair_mask |= installation_df[product_name_col].astype(str).str.contains("안마", case=False, na=False)
-
     massage_chair_data = installation_df[massage_chair_mask].copy()
 
-    # 더케어 제외 - 판매유형에 "더케어"가 포함된 항목 제거
+    # 더케어 제외
     if "판매유형" in massage_chair_data.columns:
         thecare_mask = massage_chair_data["판매유형"].astype(str).str.contains("더케어", case=False, na=False)
         massage_chair_data = massage_chair_data[~thecare_mask].copy()
-    
+
     if massage_chair_data.empty:
-        # 빈 결과 반환
-        return pd.DataFrame({
-            "제품명": ["합계"],
-            "직접": [0],
-            "연계": [0],
-            "총건": [0],
-            "비율": ["100.0%"]
-        })
-    
-    # 2. 캠페인 필터링 (본사/연계합계와 동일) - 유연하게 수정
+        return empty_result
+
+    # 2. 캠페인 필터링
+    campaign_str = massage_chair_data['일반회차 캠페인'].astype(str)
     campaign_mask = (
-        massage_chair_data['일반회차 캠페인'].astype(str).str.strip() != ""  # ① 공백이 아닌 경우
-    ) & (
-        massage_chair_data['일반회차 캠페인'].astype(str).str.contains(r'^C|^V|^AS|캠|정규|재분배', case=False, na=False)  # ② C-, V-, 캠, 정규, 재분배 포함
-    ) & ~(
-        massage_chair_data['일반회차 캠페인'].astype(str).str.startswith('CB-', na=False)  # ③ CB- 제외
+        (campaign_str.str.strip() != "") &
+        campaign_str.str.contains(r'^C|^V|^AS|캠|정규|재분배', case=False, na=False) &
+        ~campaign_str.str.startswith('CB-', na=False)
     )
-
-    
     filtered_data = massage_chair_data[campaign_mask].copy()
-    
+
     if filtered_data.empty:
-        # 빈 결과 반환
-        return pd.DataFrame({
-            "제품명": ["합계"],
-            "직접": [0],
-            "연계": [0],
-            "총건": [0],
-            "비율": ["100.0%"]
-        })
-    
-    # 3. 품목명 정리 (괄호 제거) - 개선된 방식으로
-    def clean_product_name(name):
-        if pd.isna(name):
-            return ""
+        return empty_result
 
-        name_str = str(name).strip()
+    # 3. [최적화] 품목명 정리 - 벡터화 함수 사용
+    filtered_data['정리품목명'] = clean_product_name_vectorized(filtered_data[product_name_col])
 
-        # 앞에 괄호가 있는 경우 제거 (리퍼 제품 처리)
-        # 예: (A)팔콘S, (A) 팔콘S, (S)파라오네오 등
-        while name_str.startswith("(") and ")" in name_str:
-            # 첫 번째 닫는 괄호 위치 찾기
-            close_pos = name_str.find(")")
-            if close_pos >= 0:
-                # 괄호와 그 내용을 제거
-                name_str = name_str[close_pos + 1:].strip()
-            else:
-                break
+    # 4. 직접/연계 분리
+    filtered_data['is_direct'] = filtered_data['판매인입경로'].astype(str).str.contains('CRM', case=False, na=False)
 
-        # 에덴로보 통합 - 에덴로보로 시작하는 모든 제품은 "에덴로보"로 통합
-        if name_str.startswith("에덴로보"):
-            return "에덴로보"
+    # 5. [최적화] for 루프 → groupby 사용
+    valid_data = filtered_data[filtered_data['정리품목명'] != ''].copy()
 
-        # 괄호가 있으면 괄호 앞부분만 사용
-        if '(' in name_str:
-            name_str = name_str.split('(')[0].strip()
+    if valid_data.empty:
+        return empty_result
 
-        # 공백이 있다면 첫 단어만 추출 (ex: "팔코닉 B&O" -> "팔코닉")
-        # 단, '+' 기호가 있거나 에덴로보인 경우는 제외
-        if ' ' in name_str and '+' not in name_str and not name_str.startswith("에덴로보"):
-            name_str = name_str.split(' ')[0].strip()
+    # groupby로 직접/연계 건수 집계
+    agg_result = valid_data.groupby('정리품목명').agg(
+        직접=('is_direct', 'sum'),
+        총건=('is_direct', 'count')
+    ).reset_index()
 
-        return name_str
-    
-    filtered_data['정리품목명'] = filtered_data[product_name_col].apply(clean_product_name)
-    
-    # 4. 직접/연계 분리 - 판매인입경로에 CRM이 포함된 경우 직접, 아닌 경우 연계
-    direct_mask = filtered_data['판매인입경로'].astype(str).str.contains('CRM', case=False, na=False)
-    direct_data = filtered_data[direct_mask]
-    affiliate_data = filtered_data[~direct_mask]
-    
-    # 5. 결과 데이터프레임 생성
-    result_data = []
-    
-    # 각 제품별 건수 집계
-    product_models = filtered_data['정리품목명'].dropna().unique()
-    
-    for model in product_models:
-        if not model:  # 빈 문자열 제외
-            continue
-            
-        direct_count = len(direct_data[direct_data['정리품목명'] == model])
-        affiliate_count = len(affiliate_data[affiliate_data['정리품목명'] == model])
-        total_count = direct_count + affiliate_count
-        
-        if total_count == 0:  # 건수가 0인 경우 제외
-            continue
-            
-        # 각 제품의 비율 계산
-        percentage = (total_count / len(filtered_data)) * 100
-        
-        result_data.append({
-            "제품명": model,
-            "직접": direct_count,
-            "연계": affiliate_count,
-            "총건": total_count,
-            "비율": f"{percentage:.1f}%"
-        })
-    
+    agg_result['연계'] = agg_result['총건'] - agg_result['직접']
+    agg_result = agg_result.rename(columns={'정리품목명': '제품명'})
+
+    # 건수가 0인 경우 제외
+    agg_result = agg_result[agg_result['총건'] > 0]
+
+    # 비율 계산
+    total_filtered = len(valid_data)
+    agg_result['비율'] = (agg_result['총건'] / total_filtered * 100).apply(lambda x: f"{x:.1f}%")
+
     # 정렬 (총건 기준 내림차순)
-    result_data = sorted(result_data, key=lambda x: x["총건"], reverse=True)
-    
-    # 합계 추가
-    total_direct = sum(item["직접"] for item in result_data)
-    total_affiliate = sum(item["연계"] for item in result_data)
+    agg_result = agg_result.sort_values('총건', ascending=False)
+
+    # int로 변환
+    agg_result['직접'] = agg_result['직접'].astype(int)
+    agg_result['연계'] = agg_result['연계'].astype(int)
+
+    # 합계 계산
+    total_direct = agg_result['직접'].sum()
+    total_affiliate = agg_result['연계'].sum()
     total_count = total_direct + total_affiliate
-    
-    result_data.append({
-        "제품명": "합계",
-        "직접": total_direct,
-        "연계": total_affiliate,
-        "총건": total_count,
-        "비율": "100.0%"
+
+    # 합계 행 추가
+    total_row = pd.DataFrame({
+        "제품명": ["합계"],
+        "직접": [total_direct],
+        "연계": [total_affiliate],
+        "총건": [total_count],
+        "비율": ["100.0%"]
     })
-    
-    # 데이터프레임으로 변환
-    result_df = pd.DataFrame(result_data)
-    
+
+    # 컬럼 순서 맞추기
+    result_df = pd.concat([agg_result[['제품명', '직접', '연계', '총건', '비율']], total_row], ignore_index=True)
+
     return result_df
+
 
 def analyze_sales_data(
     approval_df: pd.DataFrame, 
@@ -971,179 +1152,10 @@ def analyze_approval_data_by_product(df: pd.DataFrame) -> pd.DataFrame:
     
     # 데이터프레임으로 변환
     result_df = pd.DataFrame(result_data)
-    
+
     return result_df
 
-def analyze_installation_by_product_model(installation_df):
-    """
-    제품별 설치현황을 분석하는 함수 (안마의자 제품별 설치현황 표 생성)
-    
-    Args:
-        installation_df: 설치매출 데이터프레임
-        
-    Returns:
-        pd.DataFrame: 분석 결과 데이터프레임
-    """
-    if installation_df is None or installation_df.empty:
-        # 빈 결과 반환
-        return pd.DataFrame({
-            "제품명": ["합계"],
-            "직접": [0],
-            "연계": [0],
-            "총건": [0],
-            "비율": ["100.0%"]
-        })
-    
-    # 품목명 컬럼 확인
-    product_name_col = None
-    for col_name in ['품목명', '상품명', '제품명', '품목 명', '상품 명', '제품 명']:
-        if col_name in installation_df.columns:
-            product_name_col = col_name
-            break
-    
-    if product_name_col is None:
-        # 품목명 컬럼이 없는 경우 빈 결과 반환
-        return pd.DataFrame({
-            "제품명": ["합계"],
-            "직접": [0],
-            "연계": [0],
-            "총건": [0],
-            "비율": ["100.0%"]
-        })
-    
-    # 1. 안마의자 필터링 - 대분류 열과 품목명 열을 모두 확인
-    massage_chair_mask = installation_df["대분류"].astype(str).str.contains("안마의자", case=False, na=False)
-
-    # 품목명에도 '안마'가 포함된 항목 추가 (대분류가 다른 경우를 위해)
-    massage_chair_mask |= installation_df[product_name_col].astype(str).str.contains("안마", case=False, na=False)
-
-    massage_chair_data = installation_df[massage_chair_mask].copy()
-
-    # 더케어 제외 - 판매유형에 "더케어"가 포함된 항목 제거
-    if "판매유형" in massage_chair_data.columns:
-        thecare_mask = massage_chair_data["판매유형"].astype(str).str.contains("더케어", case=False, na=False)
-        massage_chair_data = massage_chair_data[~thecare_mask].copy()
-    
-    if massage_chair_data.empty:
-        # 빈 결과 반환
-        return pd.DataFrame({
-            "제품명": ["합계"],
-            "직접": [0],
-            "연계": [0],
-            "총건": [0],
-            "비율": ["100.0%"]
-        })
-    
-    # 2. 캠페인 필터링 (본사/연계합계와 동일) - 유연하게 수정
-    campaign_mask = (
-        massage_chair_data['일반회차 캠페인'].astype(str).str.strip() != ""  # ① 공백이 아닌 경우
-    ) & (
-        massage_chair_data['일반회차 캠페인'].astype(str).str.contains(r'^C|^V|^AS|캠|정규|재분배', case=False, na=False)  # ② C-, V-, 캠, 정규, 재분배 포함
-    ) & ~(
-        massage_chair_data['일반회차 캠페인'].astype(str).str.startswith('CB-', na=False)  # ③ CB- 제외
-    )
-
-    
-    filtered_data = massage_chair_data[campaign_mask].copy()
-    
-    if filtered_data.empty:
-        # 빈 결과 반환
-        return pd.DataFrame({
-            "제품명": ["합계"],
-            "직접": [0],
-            "연계": [0],
-            "총건": [0],
-            "비율": ["100.0%"]
-        })
-    
-    # 3. 품목명 정리 (괄호 제거) - 개선된 방식으로
-    def clean_product_name(name):
-        if pd.isna(name):
-            return ""
-
-        name_str = str(name).strip()
-
-        # 앞에 괄호가 있는 경우 제거 (리퍼 제품 처리)
-        # 예: (A)팔콘S, (A) 팔콘S, (S)파라오네오 등
-        while name_str.startswith("(") and ")" in name_str:
-            # 첫 번째 닫는 괄호 위치 찾기
-            close_pos = name_str.find(")")
-            if close_pos >= 0:
-                # 괄호와 그 내용을 제거
-                name_str = name_str[close_pos + 1:].strip()
-            else:
-                break
-
-        # 에덴로보 통합 - 에덴로보로 시작하는 모든 제품은 "에덴로보"로 통합
-        if name_str.startswith("에덴로보"):
-            return "에덴로보"
-
-        # 괄호가 있으면 괄호 앞부분만 사용
-        if '(' in name_str:
-            name_str = name_str.split('(')[0].strip()
-
-        # 공백이 있다면 첫 단어만 추출 (ex: "팔코닉 B&O" -> "팔코닉")
-        # 단, '+' 기호가 있거나 에덴로보인 경우는 제외
-        if ' ' in name_str and '+' not in name_str and not name_str.startswith("에덴로보"):
-            name_str = name_str.split(' ')[0].strip()
-
-        return name_str
-    
-    filtered_data['정리품목명'] = filtered_data[product_name_col].apply(clean_product_name)
-    
-    # 4. 직접/연계 분리 - 판매인입경로에 CRM이 포함된 경우 직접, 아닌 경우 연계
-    direct_mask = filtered_data['판매인입경로'].astype(str).str.contains('CRM', case=False, na=False)
-    direct_data = filtered_data[direct_mask]
-    affiliate_data = filtered_data[~direct_mask]
-    
-    # 5. 결과 데이터프레임 생성
-    result_data = []
-    
-    # 각 제품별 건수 집계
-    product_models = filtered_data['정리품목명'].dropna().unique()
-    
-    for model in product_models:
-        if not model:  # 빈 문자열 제외
-            continue
-            
-        direct_count = len(direct_data[direct_data['정리품목명'] == model])
-        affiliate_count = len(affiliate_data[affiliate_data['정리품목명'] == model])
-        total_count = direct_count + affiliate_count
-        
-        if total_count == 0:  # 건수가 0인 경우 제외
-            continue
-            
-        # 각 제품의 비율 계산
-        percentage = (total_count / len(filtered_data)) * 100
-        
-        result_data.append({
-            "제품명": model,
-            "직접": direct_count,
-            "연계": affiliate_count,
-            "총건": total_count,
-            "비율": f"{percentage:.1f}%"
-        })
-    
-    # 정렬 (총건 기준 내림차순)
-    result_data = sorted(result_data, key=lambda x: x["총건"], reverse=True)
-    
-    # 합계 추가
-    total_direct = sum(item["직접"] for item in result_data)
-    total_affiliate = sum(item["연계"] for item in result_data)
-    total_count = total_direct + total_affiliate
-    
-    result_data.append({
-        "제품명": "합계",
-        "직접": total_direct,
-        "연계": total_affiliate,
-        "총건": total_count,
-        "비율": "100.0%"
-    })
-    
-    # 데이터프레임으로 변환
-    result_df = pd.DataFrame(result_data)
-    
-    return result_df
+# 참고: analyze_installation_by_product_model 함수는 위에 최적화된 버전으로 정의됨 (중복 제거)
 
 def create_excel_report(
     cumulative_approval: pd.DataFrame,
@@ -1293,29 +1305,17 @@ def create_excel_report(
             worksheet1.write(current_row, 8, '매출액', header_format)
             current_row += 1
             
-            # 데이터 작성
-            for idx, (_, row) in enumerate(daily_approval.iterrows()):
+            # 데이터 작성 - 컬럼명 기반 접근 (안전한 방식)
+            for _, row in daily_approval.iterrows():
                 worksheet1.write(current_row, 0, row['제품'], data_format)
-                
-                # 값 작성 - 백만 단위로 표시
                 worksheet1.write(current_row, 1, row['총승인(본사/연계)_건수'], number_format)
-                
-                # 백만 단위로 변환하여 소수점 없이 반올림
-                total_amount = row['총승인(본사/연계)_매출액']
                 worksheet1.write(current_row, 2, row['총승인(본사/연계)_매출액'], number_format)
-                
                 worksheet1.write(current_row, 3, row['본사직접승인_건수'], number_format)
-                
                 worksheet1.write(current_row, 4, row['본사직접승인_매출액'], number_format)
-                
                 worksheet1.write(current_row, 5, row['연계승인_건수'], number_format)
-                
                 worksheet1.write(current_row, 6, row['연계승인_매출액'], number_format)
-                
                 worksheet1.write(current_row, 7, row['온라인_건수'], number_format)
-                
                 worksheet1.write(current_row, 8, row['온라인_매출액'], number_format)
-
                 current_row += 1
         else:
             # 데이터가 없는 경우 안내 메시지
@@ -1350,28 +1350,17 @@ def create_excel_report(
         worksheet1.write(current_row, 8, '매출액', header_format)
         current_row += 1
         
-        # 데이터 작성
-        for idx, (_, row) in enumerate(cumulative_approval.iterrows()):
+        # 데이터 작성 - 컬럼명 기반 접근 (안전한 방식)
+        for _, row in cumulative_approval.iterrows():
             worksheet1.write(current_row, 0, row['제품'], data_format)
-            
-            # 값 작성 - 백만 단위로 표시
             worksheet1.write(current_row, 1, row['총승인(본사/연계)_건수'], number_format)
-            
-            # 백만 단위로 변환하여 소수점 없이 반올림
             worksheet1.write(current_row, 2, row['총승인(본사/연계)_매출액'], number_format)
-            
             worksheet1.write(current_row, 3, row['본사직접승인_건수'], number_format)
-            
             worksheet1.write(current_row, 4, row['본사직접승인_매출액'], number_format)
-            
             worksheet1.write(current_row, 5, row['연계승인_건수'], number_format)
-            
             worksheet1.write(current_row, 6, row['연계승인_매출액'], number_format)
-            
             worksheet1.write(current_row, 7, row['온라인_건수'], number_format)
-            
             worksheet1.write(current_row, 8, row['온라인_매출액'], number_format)
-            
             current_row += 1
         
         # 약간의 간격 추가
@@ -1403,28 +1392,17 @@ def create_excel_report(
             worksheet1.write(current_row, 8, '매출액', header_format)
             current_row += 1
             
-            # 데이터 작성
-            for idx, (_, row) in enumerate(cumulative_installation.iterrows()):
+            # 데이터 작성 - 컬럼명 기반 접근 (안전한 방식)
+            for _, row in cumulative_installation.iterrows():
                 worksheet1.write(current_row, 0, row['제품'], data_format)
-                
-                # 값 작성 - 백만 단위로 표시
                 worksheet1.write(current_row, 1, row['총승인(본사/연계)_건수'], number_format)
-                
-                # 백만 단위로 변환하여 소수점 없이 반올림
                 worksheet1.write(current_row, 2, row['총승인(본사/연계)_매출액'], number_format)
-                
                 worksheet1.write(current_row, 3, row['본사직접승인_건수'], number_format)
-                
                 worksheet1.write(current_row, 4, row['본사직접승인_매출액'], number_format)
-                
                 worksheet1.write(current_row, 5, row['연계승인_건수'], number_format)
-                
                 worksheet1.write(current_row, 6, row['연계승인_매출액'], number_format)
-                
                 worksheet1.write(current_row, 7, row['온라인_건수'], number_format)
-                
                 worksheet1.write(current_row, 8, row['온라인_매출액'], number_format)
-                
                 current_row += 1
             
             # 4. 안마의자 제품별 설치현황 추가 (설치매출 데이터가 있는 경우)
@@ -1448,20 +1426,19 @@ def create_excel_report(
                     worksheet1.write(current_row, 4, '비율', header_format)
                     current_row += 1
                     
-                    # 데이터 작성
-                    for idx, (_, row) in enumerate(massage_chair_model_df.iterrows()):
+                    # 데이터 작성 - 컬럼명 기반 접근 (안전한 방식)
+                    for _, row in massage_chair_model_df.iterrows():
                         is_total = row['제품명'] == '합계'
                         row_format = sub_header_format if is_total else data_format
-                        
+
                         worksheet1.write(current_row, 0, row['제품명'], row_format)
                         worksheet1.write(current_row, 1, row['직접'], row_format)
                         worksheet1.write(current_row, 2, row['연계'], row_format)
                         worksheet1.write(current_row, 3, row['총건'], row_format)
                         worksheet1.write(current_row, 4, row['비율'], row_format)
-                        
                         current_row += 1
         
-        # 2. 승인매출 데이터 시트 - 원본 데이터 추가
+        # 2. 승인매출 데이터 시트 - 원본 데이터 추가 [최적화됨]
         if original_approval_df is not None and not original_approval_df.empty:
             worksheet2 = writer.sheets['승인매출'] = workbook.add_worksheet('승인매출')
 
@@ -1471,138 +1448,18 @@ def create_excel_report(
             # 유효하지 않은 컬럼 제거
             approval_data = remove_invalid_columns(approval_data)
 
-            # "제품명" 컬럼 추가 - 대분류가 안마의자이고 판매유형에 더케어가 포함되면 "더케어", 아니면 대분류 값
-            def get_product_name(row):
-                if "대분류" not in approval_data.columns:
-                    return ""
+            # [최적화] "제품명" 컬럼 추가 - 벡터화 함수 사용
+            approval_data["제품명"] = get_product_name_vectorized(approval_data)
 
-                category = str(row.get("대분류", ""))
+            # [최적화] 공통 함수로 데이터 작성
+            write_dataframe_to_worksheet_optimized(
+                worksheet2, approval_data,
+                header_format, data_format, number_format,
+                date_format, mobile_format, time_format,
+                auto_filter=True, freeze_header=True, auto_width=True
+            )
 
-                # 안마의자인 경우에만 판매유형 체크
-                if "안마의자" in category:
-                    if "판매유형" in approval_data.columns:
-                        sales_type = str(row.get("판매유형", ""))
-                        if "더케어" in sales_type:
-                            return "더케어"
-
-                return category
-
-            approval_data["제품명"] = approval_data.apply(get_product_name, axis=1)
-                
-            # 특수 컬럼 타입 식별
-            mobile_columns = []  # 모바일 번호 컬럼
-            date_columns = []    # 날짜 컬럼
-            time_columns = []    # 시간 컬럼
-            
-            # 컬럼 타입 분류
-            for col in approval_data.columns:
-                col_name = str(col).lower()
-                
-                # 모바일 번호 컬럼 식별
-                if any(term in col_name for term in ["전화", "모바일", "휴대", "번호", "폰", "phone", "mobile", "cell", "연락처", "contact"]):
-                    mobile_columns.append(col)
-                
-                # 날짜 컬럼 식별
-                elif "일자" in col_name or "날짜" in col_name or "date" in col_name or "일시" in col_name:
-                    date_columns.append(col)
-                
-                # 시간 컬럼 식별
-                elif "시간" in col_name or "time" in col_name or "hour" in col_name:
-                    time_columns.append(col)
-            
-            # 컬럼명 쓰기
-            for col_idx, col_name in enumerate(approval_data.columns):
-                worksheet2.write(0, col_idx, col_name, header_format)
-                # 컬럼 너비 설정 (자동 조정)
-                col_width = max(len(str(col_name)), 
-                               approval_data[col_name].astype(str).str.len().max() if not approval_data[col_name].empty else 0)
-                worksheet2.set_column(col_idx, col_idx, min(col_width + 2, 30))  # 최대 너비 30
-            
-            # 데이터 쓰기
-            for row_idx, (_, row) in enumerate(approval_data.iterrows(), 1):
-                for col_idx, col_name in enumerate(approval_data.columns):
-                    value = row[col_name]
-                    
-                    # NaN 값 처리
-                    if pd.isna(value):
-                        value = ""
-                        worksheet2.write(row_idx, col_idx, value, data_format)
-                        continue
-                    
-                    # 모바일 번호 및 일반 전화번호 처리 (텍스트 형식으로)
-                    if col_name in mobile_columns:
-                        # 숫자 값을 문자열로 변환
-                        if isinstance(value, (int, float)):
-                            phone_str = str(int(value))  # 소수점 제거
-                            
-                            # 한국 전화번호 보정
-                            if len(phone_str) == 10 and phone_str.startswith('10'):  # 휴대폰 번호 (예: 1012345678)
-                                # 휴대폰 번호면 앞에 0 추가
-                                formatted_str = '0' + phone_str
-                            elif len(phone_str) == 9:
-                                if phone_str.startswith('2'):  # 서울 지역번호 (예: 212345678)
-                                    # 서울 지역번호(02)인 경우 앞에 0 추가
-                                    formatted_str = '0' + phone_str
-                                elif phone_str.startswith('3') or phone_str.startswith('4') or phone_str.startswith('5') or phone_str.startswith('6'):
-                                    # 기타 지역번호(031, 032, 033, 041 등)도 앞에 0 추가
-                                    # 334392221 -> 0334392221 (033 지역번호)
-                                    formatted_str = '0' + phone_str
-                                else:
-                                    # 그 외는 그대로 유지
-                                    formatted_str = phone_str
-                            elif len(phone_str) == 10 and (phone_str.startswith('31') or phone_str.startswith('32') or 
-                                                        phone_str.startswith('33') or phone_str.startswith('41') or 
-                                                        phone_str.startswith('42') or phone_str.startswith('43') or 
-                                                        phone_str.startswith('51') or phone_str.startswith('52') or 
-                                                        phone_str.startswith('53') or phone_str.startswith('54') or 
-                                                        phone_str.startswith('55') or phone_str.startswith('61') or 
-                                                        phone_str.startswith('62') or phone_str.startswith('63') or 
-                                                        phone_str.startswith('64')):
-                                # 지역번호인 경우 앞에 0 추가
-                                formatted_str = '0' + phone_str
-                            else:
-                                # 서비스 번호(예: 15883082) 또는 기타 번호는 그대로 유지
-                                formatted_str = phone_str
-                                
-                            worksheet2.write(row_idx, col_idx, formatted_str, mobile_format)
-                        else:
-                            # 문자열이면 그대로 사용
-                            worksheet2.write(row_idx, col_idx, str(value), mobile_format)
-                    
-                    # 날짜 처리
-                    elif col_name in date_columns:
-                        # datetime 객체면 날짜 형식으로 처리
-                        if isinstance(value, (datetime, pd.Timestamp)):
-                            worksheet2.write_datetime(row_idx, col_idx, value, date_format)
-                        # 숫자형 날짜면 Excel 날짜로 변환
-                        elif isinstance(value, (int, float)) and 10000 < value < 100000:  # Excel 날짜 범위 체크
-                            worksheet2.write(row_idx, col_idx, value, date_format)
-                        else:
-                            worksheet2.write(row_idx, col_idx, value, data_format)
-                    
-                    # 시간 처리
-                    elif col_name in time_columns:
-                        # datetime 객체면 시간 형식으로 처리
-                        if isinstance(value, (datetime, pd.Timestamp)):
-                            worksheet2.write_datetime(row_idx, col_idx, value, time_format)
-                        # 숫자형 시간이면 Excel 시간으로 변환
-                        elif isinstance(value, (int, float)) and 0 <= value < 1:  # Excel 시간 범위 체크 (0~1 사이)
-                            worksheet2.write(row_idx, col_idx, value, time_format)
-                        # 날짜형 숫자에 소수부분이 있으면 시간 포함 형식으로 처리
-                        elif isinstance(value, (int, float)) and value % 1 != 0:
-                            worksheet2.write(row_idx, col_idx, value, date_format)
-                        else:
-                            worksheet2.write(row_idx, col_idx, value, data_format)
-                    
-                    # 숫자 형식 지정
-                    elif isinstance(value, (int, float)):
-                        worksheet2.write(row_idx, col_idx, value, number_format)
-                    
-                    # 기타 데이터는 일반 형식으로 처리
-                    else:
-                        worksheet2.write(row_idx, col_idx, value, data_format)
-        
-        # 3. 설치매출 데이터 시트 - 원본 데이터 추가 (있는 경우)
+        # 3. 설치매출 데이터 시트 - 원본 데이터 추가 [최적화됨]
         if original_installation_df is not None and not original_installation_df.empty:
             worksheet3 = writer.sheets['설치매출'] = workbook.add_worksheet('설치매출')
 
@@ -1612,108 +1469,16 @@ def create_excel_report(
             # 유효하지 않은 컬럼 제거
             installation_data = remove_invalid_columns(installation_data)
 
-            # "제품명" 컬럼 추가 - 대분류가 안마의자이고 판매유형에 더케어가 포함되면 "더케어", 아니면 대분류 값
-            def get_product_name_installation(row):
-                if "대분류" not in installation_data.columns:
-                    return ""
+            # [최적화] "제품명" 컬럼 추가 - 벡터화 함수 사용
+            installation_data["제품명"] = get_product_name_vectorized(installation_data)
 
-                category = str(row.get("대분류", ""))
-
-                # 안마의자인 경우에만 판매유형 체크
-                if "안마의자" in category:
-                    if "판매유형" in installation_data.columns:
-                        sales_type = str(row.get("판매유형", ""))
-                        if "더케어" in sales_type:
-                            return "더케어"
-
-                return category
-
-            installation_data["제품명"] = installation_data.apply(get_product_name_installation, axis=1)
-                
-            # 특수 컬럼 타입 식별
-            mobile_columns = []  # 모바일 번호 컬럼
-            date_columns = []    # 날짜 컬럼
-            time_columns = []    # 시간 컬럼
-            
-            # 컬럼 타입 분류
-            for col in installation_data.columns:
-                col_name = str(col).lower()
-                
-                # 모바일 번호 컬럼 식별
-                if any(term in col_name for term in ["전화", "모바일", "휴대", "번호", "폰", "phone", "mobile", "cell"]):
-                    mobile_columns.append(col)
-                
-                # 날짜 컬럼 식별
-                elif "일자" in col_name or "날짜" in col_name or "date" in col_name or "일시" in col_name:
-                    date_columns.append(col)
-                # 시간 컬럼 식별
-                elif "시간" in col_name or "time" in col_name or "hour" in col_name:
-                    time_columns.append(col)
-            
-            # 컬럼명 쓰기
-            for col_idx, col_name in enumerate(installation_data.columns):
-                worksheet3.write(0, col_idx, col_name, header_format)
-                # 컬럼 너비 설정 (자동 조정)
-                col_width = max(len(str(col_name)), 
-                               installation_data[col_name].astype(str).str.len().max() if not installation_data[col_name].empty else 0)
-                worksheet3.set_column(col_idx, col_idx, min(col_width + 2, 30))  # 최대 너비 30
-            
-            # 데이터 쓰기
-            for row_idx, (_, row) in enumerate(installation_data.iterrows(), 1):
-                for col_idx, col_name in enumerate(installation_data.columns):
-                    value = row[col_name]
-                    
-                    # NaN 값 처리
-                    if pd.isna(value):
-                        value = ""
-                        worksheet3.write(row_idx, col_idx, value, data_format)
-                        continue
-                    
-                    # 모바일 번호 처리 (텍스트 형식으로)
-                    if col_name in mobile_columns:
-                        # 숫자 값을 문자열로 변환
-                        if isinstance(value, (int, float)):
-                            mobile_str = str(int(value))  # 소수점 제거
-                            # 10자리 숫자면 앞에 0 추가 (한국 휴대폰 번호 보정)
-                            if len(mobile_str) == 10 and mobile_str.startswith('10'):
-                                mobile_str = '0' + mobile_str
-                            worksheet3.write(row_idx, col_idx, mobile_str, mobile_format)
-                        else:
-                            # 문자열이면 그대로 사용
-                            worksheet3.write(row_idx, col_idx, str(value), mobile_format)
-                    
-                    # 날짜 처리
-                    elif col_name in date_columns:
-                        # datetime 객체면 날짜 형식으로 처리
-                        if isinstance(value, (datetime, pd.Timestamp)):
-                            worksheet3.write_datetime(row_idx, col_idx, value, date_format)
-                        # 숫자형 날짜면 Excel 날짜로 변환
-                        elif isinstance(value, (int, float)) and 10000 < value < 100000:  # Excel 날짜 범위 체크
-                            worksheet3.write(row_idx, col_idx, value, date_format)
-                        else:
-                            worksheet3.write(row_idx, col_idx, value, data_format)
-                    
-                    # 시간 처리
-                    elif col_name in time_columns:
-                        # datetime 객체면 시간 형식으로 처리
-                        if isinstance(value, (datetime, pd.Timestamp)):
-                            worksheet3.write_datetime(row_idx, col_idx, value, time_format)
-                        # 숫자형 시간이면 Excel 시간으로 변환
-                        elif isinstance(value, (int, float)) and 0 <= value < 1:  # Excel 시간 범위 체크 (0~1 사이)
-                            worksheet3.write(row_idx, col_idx, value, time_format)
-                        # 날짜형 숫자에 소수부분이 있으면 시간 포함 형식으로 처리
-                        elif isinstance(value, (int, float)) and value % 1 != 0:
-                            worksheet3.write(row_idx, col_idx, value, date_format)
-                        else:
-                            worksheet3.write(row_idx, col_idx, value, data_format)
-                    
-                    # 숫자 형식 지정
-                    elif isinstance(value, (int, float)):
-                        worksheet3.write(row_idx, col_idx, value, number_format)
-                    
-                    # 기타 데이터는 일반 형식으로 처리
-                    else:
-                        worksheet3.write(row_idx, col_idx, value, data_format)
+            # [최적화] 공통 함수로 데이터 작성
+            write_dataframe_to_worksheet_optimized(
+                worksheet3, installation_data,
+                header_format, data_format, number_format,
+                date_format, mobile_format, time_format,
+                auto_filter=True, freeze_header=True, auto_width=True
+            )
         
         # 엑셀 파일 저장
         writer.close()

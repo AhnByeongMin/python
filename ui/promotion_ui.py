@@ -610,11 +610,14 @@ def show():
         col1, col2 = st.columns(2)
 
         with col1:
-            # CSV 다운로드
-            csv = result_df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+            # CSV 다운로드 - BytesIO로 직접 utf-8-sig 인코딩
+            import io
+            csv_buffer = io.BytesIO()
+            result_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+            csv_buffer.seek(0)
             st.download_button(
                 label="📥 CSV 다운로드",
-                data=csv,
+                data=csv_buffer.getvalue(),
                 file_name=f"프로모션결과_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
                 key="download_csv_btn",

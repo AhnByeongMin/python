@@ -204,23 +204,86 @@ def peek_file_content(file: Any, n_bytes: int = FILE_SETTINGS["PREVIEW_BYTES"]) 
         logger.error(error_msg)
         return error_msg
 
+# 공휴일 캐시 (메모리 + DB 이중 캐싱)
+# 메모리 캐시: 세션 내 빠른 조회용
+# DB 캐시: 영구 저장 및 주 1회 API 호출 제한용
+_holiday_cache = {}
+
+
+def _get_holiday_db_manager():
+    """공휴일용 DB 매니저 가져오기 (지연 로딩)"""
+    try:
+        from .db_manager import get_db_manager
+        return get_db_manager()
+    except Exception as e:
+        logger.warning(f"DB 매니저 로드 실패: {e}")
+        return None
+
+
+def _fetch_holidays_from_api(year: int, month: int) -> tuple:
+    """
+    API에서 공휴일 데이터를 조회하고 결과 반환
+
+    Returns:
+        (holiday_dates: set, holidays_with_names: list, success: bool)
+    """
+    try:
+        params = {
+            'serviceKey': API_SETTINGS["HOLIDAY_API_KEY"],
+            'solYear': year,
+            'solMonth': f"{month:02d}"
+        }
+
+        response = requests.get(API_SETTINGS["HOLIDAY_API_URL"], params=params, timeout=3)
+
+        if not response.content:
+            return set(), [], True
+
+        root = ET.fromstring(response.content)
+        items = root.find('.//items')
+        holiday_dates = set()
+        holidays_with_names = []
+
+        if items is not None:
+            for item in items.findall('./item'):
+                locdate_elem = item.find('locdate')
+                datename_elem = item.find('dateName')
+
+                if locdate_elem is not None and locdate_elem.text:
+                    locdate = locdate_elem.text
+                    holiday_date = datetime.strptime(locdate, '%Y%m%d').date()
+                    holiday_dates.add(holiday_date)
+
+                    date_str = holiday_date.strftime('%Y-%m-%d')
+                    name = datename_elem.text if datename_elem is not None else ""
+                    holidays_with_names.append((date_str, name))
+
+        return holiday_dates, holidays_with_names, True
+
+    except Exception as e:
+        logger.error(f"공휴일 API 호출 중 오류 발생: {str(e)}")
+        return set(), [], False
+
+
 def is_holiday(date: datetime) -> bool:
     """
     주어진 날짜가 공휴일 또는 주말인지 확인합니다.
-    
+    [최적화] DB + 메모리 이중 캐싱, API는 주 1회만 호출
+
     Args:
         date (datetime): 확인할 날짜
-        
+
     Returns:
         bool: 공휴일 또는 주말이면 True, 아니면 False
-        
+
     Notes:
         - 주말(토요일, 일요일) 자동 확인
         - 양력 기반 법정 공휴일 확인
         - 음력 기반 공휴일(설날, 추석) 확인
         - 대체 공휴일 확인
-        - 공공데이터포털 API를 통한 공휴일 정보 추가 확인
-        
+        - DB 캐시 우선 확인 (주 1회 API 호출 제한)
+        - 메모리 캐시로 세션 내 빠른 조회
+
     Example:
         >>> from datetime import datetime
         >>> is_holiday(datetime(2023, 1, 1))  # 신정
@@ -232,66 +295,73 @@ def is_holiday(date: datetime) -> bool:
     month = date.month
     day = date.day
     date_tuple = (year, month, day)
-    
-    # 주말 체크 (토요일: 5, 일요일: 6)
+
+    # 1. 주말 체크 (가장 빠름)
     if date.weekday() >= 5:
         return True
-    
-    # 법정 공휴일 체크 (백업 데이터)
+
+    # 2. 백업 공휴일 데이터 체크 (법정 공휴일)
     if (month, day) in FIXED_HOLIDAYS:
         return True
-    
-    # 설날/추석 체크 (백업 데이터)
+
     if date_tuple in LUNAR_HOLIDAYS:
         return True
-    
-    # 대체 공휴일 체크 (백업 데이터)
+
     if date_tuple in ALTERNATIVE_HOLIDAYS:
         return True
-    
-    # API 호출을 통한 공휴일 체크
+
+    # 3. 메모리 캐시 확인 (세션 내 빠른 조회)
+    cache_key = (year, month)
+    if cache_key in _holiday_cache:
+        return date.date() in _holiday_cache[cache_key]
+
+    # 4. DB 캐시 확인 (영구 저장)
+    db = _get_holiday_db_manager()
+    if db is not None:
+        try:
+            # DB에서 캐시된 공휴일 조회
+            cached_holidays = db.get_holidays_for_month(year, month)
+
+            if cached_holidays is not None:
+                # DB 캐시 존재 -> 메모리 캐시에도 저장
+                _holiday_cache[cache_key] = cached_holidays
+
+                # 주 1회 갱신 체크 (백그라운드 갱신 아님, 동기적이지만 빈도 낮음)
+                if db.should_refresh_holidays(year, month, days_interval=7):
+                    # API 재시도 방지 체크
+                    if not db.is_api_failed_recently(year, month, hours=24):
+                        holiday_dates, holidays_with_names, success = _fetch_holidays_from_api(year, month)
+                        db.save_holidays(year, month, holidays_with_names, success)
+                        if success:
+                            _holiday_cache[cache_key] = holiday_dates
+
+                return date.date() in _holiday_cache[cache_key]
+
+            # DB 캐시 없음 -> API 호출 필요
+            if not db.is_api_failed_recently(year, month, hours=24):
+                holiday_dates, holidays_with_names, success = _fetch_holidays_from_api(year, month)
+                db.save_holidays(year, month, holidays_with_names, success)
+                _holiday_cache[cache_key] = holiday_dates
+                return date.date() in holiday_dates
+
+            # 최근 API 실패 -> 빈 캐시
+            _holiday_cache[cache_key] = set()
+            return False
+
+        except Exception as e:
+            logger.error(f"공휴일 DB 캐시 조회 중 오류: {e}")
+
+    # 5. DB 없이 메모리 전용 모드 (기존 방식 폴백)
     try:
-        # API 요청 파라미터 설정
-        params = {
-            'serviceKey': API_SETTINGS["HOLIDAY_API_KEY"],
-            'solYear': year,
-            'solMonth': f"{month:02d}"
-        }
-        
-        # API 요청
-        response = requests.get(API_SETTINGS["HOLIDAY_API_URL"], params=params)
-        
-        # 응답이 비어있는지 확인
-        if not response.content:
-            return False
-        
-        # XML 응답 파싱
-        root = ET.fromstring(response.content)
-        
-        # 응답 구조 확인 및 공휴일 검사
-        items = root.find('.//items')
-        if items is None:
-            # items 요소가 없으면 공휴일 정보가 없는 것으로 간주
-            return False
-            
-        # 공휴일 목록 순회
-        for item in items.findall('./item'):
-            # 공휴일 날짜 가져오기 (yyyyMMdd 형식)
-            locdate_elem = item.find('locdate')
-            if locdate_elem is not None and locdate_elem.text:
-                locdate = locdate_elem.text
-                holiday_date = datetime.strptime(locdate, '%Y%m%d').date()
-                
-                # 주어진 날짜와 일치하는지 확인
-                if date.date() == holiday_date:
-                    return True
-            
-        return False
-        
+        holiday_dates, _, success = _fetch_holidays_from_api(year, month)
+        if success:
+            _holiday_cache[cache_key] = holiday_dates
+            return date.date() in holiday_dates
     except Exception as e:
-        logger.error(f"공휴일 API 호출 중 오류 발생: {str(e)}")
-        # 오류 발생 시 백업 공휴일 데이터만 사용 (주말은 이미 위에서 처리)
-        return False
+        logger.error(f"공휴일 API 폴백 호출 중 오류: {e}")
+
+    _holiday_cache[cache_key] = set()
+    return False
 
 def get_previous_business_day(current_date: datetime) -> datetime:
     """

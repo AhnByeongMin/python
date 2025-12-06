@@ -12,9 +12,87 @@ import re
 import xlsxwriter
 from datetime import datetime, timedelta
 from typing import Tuple, Dict, List, Optional, Any, Union
+from collections import Counter
 
 # utils.py에서 필요한 함수 가져오기
 from utils.utils import format_time, peek_file_content
+
+
+# =============================================================================
+# 최적화된 벡터화 함수들
+# =============================================================================
+
+def classify_consultant_products_vectorized(df: pd.DataFrame) -> pd.Series:
+    """
+    상담원 실적용 제품 분류 벡터화 버전 (최적화)
+
+    우선순위 (PAGE_LOGIC_SPECIFICATION.md 5.3.4 참조):
+    1. 더케어: 판매유형에 '케어' 포함
+    2. 멤버십: 판매유형에 '멤버십' 또는 '멤버쉽' 포함
+    3. 안마의자: 대분류에 '안마의자' 포함
+    4. 라클라우드: 대분류에 '라클라우드' 포함
+    5. 정수기: 대분류에 '정수기' 포함
+
+    주의: 프로모션 로직과 우선순위가 다름!
+
+    Args:
+        df: 대분류, 판매 유형 컬럼이 있는 데이터프레임
+
+    Returns:
+        pd.Series: 분류된 제품명 시리즈
+    """
+    sale_type = df['판매 유형'].fillna('').astype(str).str.lower() if '판매 유형' in df.columns else pd.Series('', index=df.index)
+    category = df['대분류'].fillna('').astype(str).str.lower()
+
+    # 조건 정의 (우선순위 순서대로 - 프로모션과 다름!)
+    cond_thecare = sale_type.str.contains('케어', na=False)
+    cond_membership = sale_type.str.contains('멤버십|멤버쉽', na=False, regex=True)
+    cond_massage = category.str.contains('안마의자', na=False)
+    cond_lacloud = category.str.contains('라클라우드', na=False)
+    cond_water = category.str.contains('정수기', na=False)
+
+    conditions = [cond_thecare, cond_membership, cond_massage, cond_lacloud, cond_water]
+    choices = ['더케어', '멤버십', '안마의자', '라클라우드', '정수기']
+
+    return pd.Series(np.select(conditions, choices, default='기타'), index=df.index)
+
+
+def time_to_seconds_vectorized(time_series: pd.Series) -> pd.Series:
+    """
+    콜타임 시간 문자열을 초로 변환 (벡터화 버전)
+
+    Args:
+        time_series: 시간 문자열 시리즈 (HH:MM:SS 형식)
+
+    Returns:
+        pd.Series: 초 단위 시리즈
+    """
+    def parse_time(time_str):
+        if pd.isna(time_str):
+            return 0
+        time_str = str(time_str)
+        time_parts = re.findall(r'\d+', time_str)
+        if not time_parts:
+            return 0
+        if len(time_parts) == 3:
+            h, m, s = map(int, time_parts)
+            return h * 3600 + m * 60 + s
+        elif len(time_parts) == 2:
+            m, s = map(int, time_parts)
+            return m * 60 + s
+        return int(time_parts[0]) if time_parts else 0
+
+    return time_series.apply(parse_time)
+
+
+def find_duplicate_columns_optimized(cols: list) -> set:
+    """
+    중복 컬럼 찾기 최적화 버전 (O(n) 복잡도)
+
+    기존: set([x for x in cols if cols.count(x) > 1]) - O(n²)
+    최적화: Counter 사용 - O(n)
+    """
+    return {k for k, v in Counter(cols).items() if v > 1}
 
 def process_consultant_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """
@@ -47,8 +125,8 @@ def process_consultant_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]
             if df is not None:
                 # 컬럼 리스트 확인
                 cols = df.columns.tolist()
-                # 중복된 컬럼 확인
-                dupes = set([x for x in cols if cols.count(x) > 1])
+                # 중복된 컬럼 확인 (최적화: O(n) 복잡도)
+                dupes = find_duplicate_columns_optimized(cols)
                 if dupes:
                     # 중복 컬럼 수정 - 수동으로 번호 부여
                     new_cols = []
@@ -78,8 +156,8 @@ def process_consultant_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]
                 if df is not None:
                     # 컬럼 리스트 확인
                     cols = df.columns.tolist()
-                    # 중복된 컬럼 확인
-                    dupes = set([x for x in cols if cols.count(x) > 1])
+                    # 중복된 컬럼 확인 (최적화: O(n) 복잡도)
+                    dupes = find_duplicate_columns_optimized(cols)
                     if dupes:
                         # 중복 컬럼 수정 - 수동으로 번호 부여
                         new_cols = []
@@ -95,7 +173,7 @@ def process_consultant_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]
                                 new_cols.append(col)
                         # 새 컬럼 이름 적용
                         df.columns = new_cols
-                
+
             except Exception as e:
                 errors.append(f"xlrd 엔진 실패: {str(e)}")
         
@@ -109,8 +187,8 @@ def process_consultant_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]
                 if df is not None:
                     # 컬럼 리스트 확인
                     cols = df.columns.tolist()
-                    # 중복된 컬럼 확인
-                    dupes = set([x for x in cols if cols.count(x) > 1])
+                    # 중복된 컬럼 확인 (최적화: O(n) 복잡도)
+                    dupes = find_duplicate_columns_optimized(cols)
                     if dupes:
                         # 중복 컬럼 수정 - 수동으로 번호 부여
                         new_cols = []
@@ -126,7 +204,7 @@ def process_consultant_file(file) -> Tuple[Optional[pd.DataFrame], Optional[str]
                                 new_cols.append(col)
                         # 새 컬럼 이름 적용
                         df.columns = new_cols
-                
+
             except Exception as e:
                 errors.append(f"openpyxl 엔진 실패: {str(e)}")
         

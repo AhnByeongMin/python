@@ -1,7 +1,10 @@
 """
-매출 데이터 분석 로직
+매출 데이터 분석 로직 [최적화 버전]
 
 이 모듈은 복수 엑셀 파일을 처리하고 상담사별 집계를 생성합니다.
+
+최적화 적용 사항:
+- iterrows() → itertuples() 변환
 """
 
 import pandas as pd
@@ -337,12 +340,12 @@ def create_aggregation_tables(df: pd.DataFrame) -> Tuple[Optional[Dict[str, pd.D
                             '건수': ''
                         })
 
-                        # 해당 캠페인의 상담사별 데이터 추가
-                        for _, row in campaign_data.iterrows():
+                        # [최적화] 해당 캠페인의 상담사별 데이터 추가 - itertuples() 사용
+                        for row in campaign_data.itertuples(index=False):
                             result_rows.append({
                                 '일반회차 캠페인': '',
-                                '상담사': row['상담사'],
-                                '건수': row['건수']
+                                '상담사': row.상담사,
+                                '건수': row.건수
                             })
 
                     # 총건 행 추가
@@ -431,10 +434,12 @@ def create_excel_output(
 
                 current_row += 1
 
-                for row_idx, row in table_df.iterrows():
+                # [최적화] itertuples() 사용
+                last_idx = len(table_df) - 1
+                for row_idx, row in enumerate(table_df.itertuples(index=False)):
                     for col_idx, value in enumerate(row):
                         # 총 합계, 총건 행은 강조
-                        if row_idx == len(table_df) - 1:
+                        if row_idx == last_idx:
                             worksheet.write(current_row, col_idx, value, total_format)
                         else:
                             worksheet.write(current_row, col_idx, value)

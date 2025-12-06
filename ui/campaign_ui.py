@@ -263,11 +263,13 @@ def display_results(results_df, cleaned_data, consultant_df):
                     key="download_campaign_excel_tab3"
                 )
             else:
-                # 대체 다운로드 방법 제공
-                csv = results_df.to_csv(index=False).encode('utf-8-sig')
+                # 대체 다운로드 방법 제공 - BytesIO로 직접 utf-8-sig 인코딩
+                csv_buffer = io.BytesIO()
+                results_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+                csv_buffer.seek(0)
                 st.download_button(
                     label="CSV 다운로드 (결과만)",
-                    data=csv,
+                    data=csv_buffer.getvalue(),
                     file_name=f"{file_prefix}캠페인_분석결과.csv",
                     mime="text/csv",
                     key="download_campaign_csv_tab3"
@@ -276,19 +278,21 @@ def display_results(results_df, cleaned_data, consultant_df):
         except Exception as e:
             st.error(f"다운로드 버튼 생성 중 오류가 발생했습니다: {str(e)}")
             try:
-                # 대체 다운로드 방법 제공
-                csv = results_df.to_csv(index=False).encode('utf-8-sig')
-                
+                # 대체 다운로드 방법 제공 - BytesIO로 직접 utf-8-sig 인코딩
+                csv_buffer = io.BytesIO()
+                results_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+                csv_buffer.seek(0)
+
                 # 현재 날짜와 UUID 생성 (예외 처리 내에서도 동일하게 적용)
                 import datetime
                 import uuid
                 today = datetime.datetime.now().strftime('%Y%m%d')
                 unique_id = str(uuid.uuid4())[:4]
                 file_prefix = f"{today}_{unique_id}_"
-                
+
                 st.download_button(
                     label="CSV 다운로드 (결과만)",
-                    data=csv,
+                    data=csv_buffer.getvalue(),
                     file_name=f"{file_prefix}캠페인_분석결과.csv",
                     mime="text/csv",
                     key="download_campaign_csv_tab3"

@@ -1,12 +1,24 @@
 """
-CRM 데이터 분석기 메인 애플리케이션
+CRM 데이터 분석기 메인 애플리케이션 [최적화 버전]
 
 이 파일은 Streamlit 애플리케이션의 진입점으로,
 다양한 데이터 분석 도구를 탭으로 구성하여 표시합니다.
+
+최적화 적용 사항:
+- 벡터화 연산으로 iterrows() 제거
+- apply(lambda) → np.select() 변환
+- 중복 컬럼 검사 O(n²) → O(n) 최적화
+- pandas crosstab/pivot_table 활용
 """
 
 # 필요한 라이브러리 임포트
 import streamlit as st
+import time
+
+# Streamlit 성능 최적화 설정
+# 파일 업로드 시 전체 리렌더링 방지
+if 'initialized' not in st.session_state:
+    st.session_state.initialized = True
 
 # 탭별 모듈 임포트 - UI 모듈을 직접 호출하도록 변경
 from ui import sales_ui
@@ -15,11 +27,12 @@ from ui import campaign_ui
 from ui import daily_sales_ui
 from ui import promotion_ui  # 새로운 상담사 프로모션 UI 모듈 추가
 from ui import target_settings_ui  # CRM 목표 설정 UI 모듈 추가
+from ui import affiliate_check_ui  # 연계실적 체크 UI 모듈 추가
 
 # 페이지 설정
 st.set_page_config(
-    page_title="CRM팀 데이터 분석기", 
-    page_icon="📊",  # 차트 이모지 사용
+    page_title="CRM팀 데이터 분석기 [최적화]",
+    page_icon="🚀",  # 로켓 이모지로 최적화 버전 표시
     layout="wide"
 )
 
@@ -33,7 +46,7 @@ st.markdown("""
     
     /* Streamlit 상단 Hamburger 메뉴 너머 공백 영역에 텍스트 추가 */
     header [data-testid="stHeader"]::before {
-        content: 'CRM팀 데이터 분석기';
+        content: '🚀 CRM팀 데이터 분석기 [최적화 버전]';
         color: white;
         font-size: 1.2rem;
         font-weight: bold;
@@ -168,14 +181,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 최상위 탭 생성 (상담사 프로모션 탭 추가)
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+# 최상위 탭 생성 (연계실적체크 탭 추가)
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📊 예약 체험 신규 현황",
     "👥 상담원 실적 현황",
     "📢 캠페인/정규분배 현황",
     "📈 일일 매출 현황",
+    "🔍 연계실적체크",  # 일일 매출 뒤에 추가
     "🏆 상담사 프로모션 진행현황",
-    "🎯 CRM 목표 설정"  # 새로운 탭 추가
+    "🎯 CRM 목표 설정"
 ])
 
 # 탭1: 매출 데이터 분석 도구
@@ -194,17 +208,21 @@ with tab3:
 with tab4:
     daily_sales_ui.show()
 
-# 탭5: 상담사 프로모션 진행현황
+# 탭5: 연계실적체크 (새로 추가)
 with tab5:
+    affiliate_check_ui.show()
+
+# 탭6: 상담사 프로모션 진행현황
+with tab6:
     promotion_ui.show()
 
-# 탭6: CRM 목표 설정 (새로 추가)
-with tab6:
+# 탭7: CRM 목표 설정
+with tab7:
     target_settings_ui.show()
 
 # 페이지 하단 정보
 st.markdown("""
 <div style="text-align: center; margin-top: 30px; padding: 10px; color: #666;">
-    © 2025 CRM팀 데이터 분석 도구 Made in BM | 버전 3.1.0
+    © 2025 CRM팀 데이터 분석 도구 Made in BM | 버전 3.2.0-optimized 🚀
 </div>
 """, unsafe_allow_html=True)

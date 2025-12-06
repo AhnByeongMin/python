@@ -22,6 +22,50 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# 최적화된 벡터화 함수들
+# =============================================================================
+
+def classify_products_vectorized(df: pd.DataFrame) -> pd.Series:
+    """
+    제품 분류 벡터화 버전 (최적화)
+
+    우선순위 (PAGE_LOGIC_SPECIFICATION.md 3.3.1 참조):
+    1. 라클라우드: 대분류에 '라클' 포함
+    2. 더케어: 대분류에 '안마' 포함 AND 판매유형에 '케어' 포함
+    3. 안마의자: 대분류에 '안마' 포함
+    4. 멤버십: 대분류에 '정수기' 포함 AND 판매유형에 '멤버' 포함
+    5. 정수기: 대분류에 '정수기' 포함
+    6. 기타: 나머지 (대분류 값 그대로)
+
+    Args:
+        df: 대분류, 판매 유형 컬럼이 있는 데이터프레임
+
+    Returns:
+        pd.Series: 분류된 제품명 시리즈
+    """
+    category = df['대분류'].fillna('').astype(str).str.lower()
+    sales_type = df['판매 유형'].fillna('').astype(str).str.lower()
+
+    # 조건 정의 (우선순위 순서대로 - 중요!)
+    cond_lacloud = category.str.contains('라클', na=False)
+    cond_thecare = category.str.contains('안마', na=False) & (
+        sales_type.str.contains('케어', na=False) | sales_type.str.contains('더케어', na=False)
+    )
+    cond_massage = category.str.contains('안마', na=False) & ~(
+        sales_type.str.contains('케어', na=False) | sales_type.str.contains('더케어', na=False)
+    )
+    cond_membership = category.str.contains('정수기', na=False) & sales_type.str.contains('멤버', na=False)
+    cond_water = category.str.contains('정수기', na=False) & ~sales_type.str.contains('멤버', na=False)
+
+    conditions = [cond_lacloud, cond_thecare, cond_massage, cond_membership, cond_water]
+    choices = ['라클라우드', '더케어', '안마의자', '멤버십', '정수기']
+
+    # 기본값은 원래 대분류 값
+    result = np.select(conditions, choices, default=df['대분류'].fillna('기타'))
+    return pd.Series(result, index=df.index)
+
+
 def classify_product(row: pd.Series) -> str:
     """
     대분류와 판매유형을 기반으로 제품을 5개 카테고리로 분류
@@ -239,68 +283,52 @@ def analyze_promotion_data_new(
                     filtered_df["상담사 조직"].astype(str).str.contains("CRM|crm", case=False, na=False)
                 ]
 
-        # 제품 분류 컬럼 추가
-        filtered_df["제품분류"] = filtered_df.apply(classify_product, axis=1)
+        # 제품 분류 컬럼 추가 (벡터화 버전 사용 - 최적화)
+        filtered_df["제품분류"] = classify_products_vectorized(filtered_df)
 
         # 필터링된 원본 데이터 저장 (엑셀 다운로드용)
         original_filtered_df = filtered_df.copy()
 
-        # 상담사별 집계
-        result_data = []
-        consultants = filtered_df["상담사"].unique()
+        # 상담사별 집계 (벡터화 - 최적화)
+        # 제품별 건수를 피벗 테이블로 한 번에 계산
+        product_counts_df = pd.crosstab(
+            filtered_df["상담사"],
+            filtered_df["제품분류"]
+        ).reindex(columns=["안마의자", "라클라우드", "정수기", "더케어", "멤버십"], fill_value=0)
 
-        for consultant in consultants:
-            consultant_df = filtered_df[filtered_df["상담사"] == consultant]
+        # 상담사별 승인액 합계
+        sales_sum = filtered_df.groupby("상담사")["매출 금액"].sum()
 
-            # 제품별 건수 집계
-            product_counts = {}
-            for product in ["안마의자", "라클라우드", "정수기", "더케어", "멤버십"]:
-                count = len(consultant_df[consultant_df["제품분류"] == product])
-                product_counts[product] = count
+        # 결과 데이터프레임 생성
+        result_df = product_counts_df.reset_index()
+        result_df["승인액"] = result_df["상담사"].map(sales_sum).fillna(0)
 
-            # 총 승인 건수 및 승인액
-            if include_services:
-                # 서비스 포함 시 모든 제품 카운트
-                total_count = sum(product_counts.values())
-            else:
-                # 서비스 제외 시 안마의자, 라클라우드, 정수기만
-                total_count = (product_counts["안마의자"] +
-                             product_counts["라클라우드"] +
-                             product_counts["정수기"])
+        # 승인건수 계산
+        if include_services:
+            # 서비스 포함 시 모든 제품 카운트
+            result_df["승인건수"] = (
+                result_df["안마의자"] + result_df["라클라우드"] + result_df["정수기"] +
+                result_df["더케어"] + result_df["멤버십"]
+            )
+        else:
+            # 서비스 제외 시 안마의자, 라클라우드, 정수기만
+            result_df["승인건수"] = (
+                result_df["안마의자"] + result_df["라클라우드"] + result_df["정수기"]
+            )
 
-            total_amount = consultant_df["매출 금액"].sum()
-
-            # 제품별 점수 계산 (제품별 기준인 경우)
-            product_score = 0
-            if analysis_mode == "제품별":
-                for product, count in product_counts.items():
-                    weight = product_weights.get(product, 0)
-                    product_score += count * weight
-
-            # 결과 딕셔너리
-            result_dict = {
-                "상담사": consultant,
-                "안마의자": product_counts["안마의자"],
-                "라클라우드": product_counts["라클라우드"],
-                "정수기": product_counts["정수기"],
-                "더케어": product_counts["더케어"],
-                "멤버십": product_counts["멤버십"],
-                "승인건수": total_count,
-                "승인액": total_amount
-            }
-
-            # 제품별 모드인 경우 점수 추가
-            if analysis_mode == "제품별":
-                result_dict["점수"] = product_score
-
-            result_data.append(result_dict)
+        # 제품별 점수 계산 (벡터화)
+        if analysis_mode == "제품별":
+            result_df["점수"] = (
+                result_df["안마의자"] * product_weights.get("안마의자", 0) +
+                result_df["라클라우드"] * product_weights.get("라클라우드", 0) +
+                result_df["정수기"] * product_weights.get("정수기", 0) +
+                result_df["더케어"] * product_weights.get("더케어", 0) +
+                result_df["멤버십"] * product_weights.get("멤버십", 0)
+            )
 
         # 결과 없음
-        if not result_data:
+        if result_df.empty:
             return None, "조건에 맞는 상담사가 없습니다.", original_filtered_df
-
-        # 데이터프레임 생성
-        result_df = pd.DataFrame(result_data)
 
         # 정렬 기준 설정
         if analysis_mode == "제품별":
@@ -769,12 +797,11 @@ def create_promotion_excel(result_df: pd.DataFrame, original_df: pd.DataFrame, a
             # 순위 최대값 계산 (그라데이션용)
             max_rank = result_df['순위'].max() if '순위' in result_df.columns else 0
 
-            # 데이터 행별 스타일 적용
-            for row_idx, row in result_df.iterrows():
-                excel_row = row_idx + 1  # 헤더가 0번 행, 데이터는 1번 행부터
-
-                for col_idx, col_name in enumerate(result_df.columns):
-                    value = row[col_name]
+            # 데이터 행별 스타일 적용 (itertuples 사용 - 최적화)
+            columns_list = list(result_df.columns)
+            for excel_row, row in enumerate(result_df.itertuples(index=False), start=1):
+                for col_idx, col_name in enumerate(columns_list):
+                    value = row[col_idx]
 
                     # 제품별 분석: 등급 컬럼만 색상 적용
                     if analysis_mode == '제품별':
